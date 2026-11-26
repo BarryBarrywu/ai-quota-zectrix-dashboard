@@ -43,3 +43,9 @@ A dedicated dual-AI quota and reset-signal desk instrument with zero task-title 
 2. **Honest 1-bit polarity**: Use black-vs-white inversion solely to establish primary/secondary hierarchy and to flag active reset schedules/confirmations—never for ornament.
 3. **Truthful degradation**: Stale caches and unavailable sources must remain visually unambiguous without disturbing healthy sections.
 4. **Zero noise on quiet days**: When no reset schedule or recent confirmation exists, the reset row recedes so quota numbers own the screen.
+
+## Companion commands
+
+`live-preview --output preview.png` gathers all four observations and writes a local image. The implemented Antigravity quota source reads the official CLI statusLine JSON file named by `AI_QUOTA_STATUSLINE_PATH`. A missing or invalid capture retains the last validated quota as stale when available. Automatic desktop RPC collection remains pending.
+
+`setup` previews the live frame and asks before uploading. `run` starts the companion in the foreground. `diagnostics` prints per-source and publisher health. On macOS, `launch-agent plist` prints the login agent definition, `launch-agent install` copies the executable into Application Support and starts it, and `launch-agent remove` stops and removes it. Installation captures the configured statusLine path and Codex executable path. Pass `--codex-program /absolute/path/to/codex` to select a specific executable.
