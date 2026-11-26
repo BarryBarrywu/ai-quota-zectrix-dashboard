@@ -19,6 +19,20 @@ pub fn configure(
     output: &mut impl Write,
     save_key: impl FnOnce() -> Result<()>,
 ) -> Result<bool> {
+    configure_with_clock(dir, cloud, dashboard, input, output, save_key, || {
+        chrono::Local::now().fixed_offset()
+    })
+}
+
+pub fn configure_with_clock(
+    dir: &Path,
+    cloud: &Cloud,
+    dashboard: &Dashboard,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    save_key: impl FnOnce() -> Result<()>,
+    mut now: impl FnMut() -> chrono::DateTime<chrono::FixedOffset>,
+) -> Result<bool> {
     fs::create_dir_all(dir)?;
     // Two setup sessions must never present different images at the same preview path.
     let setup_lock = fs::File::options()
@@ -48,26 +62,34 @@ pub fn configure(
         previous.as_ref().map_or(1, |s| usize::from(s.page_id)),
         5,
     )?;
-    let prepared = Prepared::new(dashboard)?;
-    let preview = dir.join("pending-preview.png");
-    save(&preview, &prepared.png()?)?;
-    writeln!(output, "已生成预览 {}", preview.display())?;
-    if !yes(input, output, "确认用该预览替换选定页面？", false)? {
-        writeln!(output, "已取消上传。")?;
-        return Ok(false);
-    }
     let settings = Settings {
         device_id: devices[index].device_id.clone(),
         page_id: page as u8,
     };
-    let _lock = lock(dir)?;
-    let outcome = send_prepared(
-        dir,
-        cloud,
-        &settings,
-        &prepared,
-        chrono::Utc::now().timestamp(),
-    )?;
+    let preview = dir.join("pending-preview.png");
+    let mut current = dashboard.clone();
+    current.now = now();
+    let (_publisher_lock, outcome) = loop {
+        let prepared = Prepared::new(&current)?;
+        let png = prepared.png()?;
+        save(&preview, &png)?;
+        writeln!(output, "已生成预览 {}", preview.display())?;
+        if !yes(input, output, "确认用该预览替换选定页面？", false)? {
+            writeln!(output, "已取消上传。")?;
+            return Ok(false);
+        }
+        let publisher_lock = lock(dir)?;
+        current.now = now();
+        let confirmed = Prepared::new(&current)?;
+        if confirmed.png()? != png {
+            writeln!(output, "时间已更新，请确认新预览。")?;
+            continue;
+        }
+        break (
+            publisher_lock,
+            send_prepared(dir, cloud, &settings, &confirmed, current.now.timestamp())?,
+        );
+    };
     if let PublishOutcome::Deferred { until } = outcome {
         return Err(format!("上传间隔未满，请在 Unix 时间 {until} 后重试").into());
     }

@@ -59,6 +59,13 @@ impl CodexObserver {
         self.failure
     }
 
+    pub(crate) fn retry_seconds(&self) -> Option<i64> {
+        (self.failure == Some(CodexFailure::Transport)).then(|| {
+            let remaining = self.reconnect_at.saturating_sub((self.clock)());
+            remaining.as_secs_f64().ceil().max(1.0) as i64
+        })
+    }
+
     pub fn poll(&mut self) -> Source<CodexQuota> {
         if self.session.is_none() {
             if (self.clock)() < self.reconnect_at {
@@ -114,7 +121,7 @@ struct Response {
 }
 #[derive(Deserialize)]
 struct Limits {
-    primary: Window,
+    primary: Option<Window>,
     secondary: Option<Window>,
 }
 #[derive(Deserialize)]
@@ -126,23 +133,23 @@ struct Credits {
 #[serde(rename_all = "camelCase")]
 struct Window {
     used_percent: u8,
-    window_duration_mins: u64,
-    resets_at: i64,
+    window_duration_mins: Option<u64>,
+    resets_at: Option<i64>,
 }
 
 fn parse_quota(value: Value) -> Result<Option<CodexQuota>, ()> {
     let response: Response = serde_json::from_value(value).map_err(|_| ())?;
     let limits = response.rate_limits;
     let mut weekly = None;
-    for window in std::iter::once(limits.primary).chain(limits.secondary) {
-        if window.window_duration_mins == 0 || window.used_percent > 100 {
+    for window in limits.primary.into_iter().chain(limits.secondary) {
+        if window.window_duration_mins == Some(0) || window.used_percent > 100 {
             return Err(());
         }
-        if window.window_duration_mins == 7 * 24 * 60 {
+        if window.window_duration_mins == Some(7 * 24 * 60) {
             weekly = Some(QuotaWindow {
                 kind: WindowKind::Weekly,
                 remaining_percent: 100 - window.used_percent,
-                resets_at: window.resets_at,
+                resets_at: window.resets_at.filter(|t| *t > 0).ok_or(())?,
             });
         }
     }

@@ -143,15 +143,24 @@ impl RadarObserver {
         }
         let response = request.send().map_err(|_| "network error")?;
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            if let Some(delay) = response
+            if let Some(deadline) = response
                 .headers()
                 .get(reqwest::header::RETRY_AFTER)
                 .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<u64>().ok())
+                .and_then(|v| {
+                    v.parse::<u64>()
+                        .ok()
+                        .map(|seconds| {
+                            now.saturating_add(i64::try_from(seconds).unwrap_or(i64::MAX))
+                        })
+                        .or_else(|| {
+                            httpdate::parse_http_date(v)
+                                .ok()
+                                .map(|date| DateTime::<chrono::Utc>::from(date).timestamp())
+                        })
+                })
             {
-                self.next_poll = self
-                    .next_poll
-                    .max(now.saturating_add(i64::try_from(delay).unwrap_or(i64::MAX)));
+                self.next_poll = self.next_poll.max(deadline);
             }
             self.retry_after = Some(self.next_poll);
             self.persist()?;
@@ -222,7 +231,7 @@ fn timestamp(v: &Value) -> Option<i64> {
 
 fn scope(record: &Value, provider: Provider) -> Scope {
     if provider == Provider::Codex {
-        return Scope::All;
+        return Scope::Unknown;
     }
     let scope = &record["scope"];
     match scope["modelScope"].as_str() {

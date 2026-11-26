@@ -69,7 +69,7 @@ fn stale_and_unavailable_sources_change_only_their_own_screen_region() {
                 }
                 1 => {
                     d.antigravity = bad.antigravity.clone();
-                    (214, 29, 400, 246, "AGY 未运行")
+                    (214, 29, 400, 246, "额度不可用")
                 }
                 2 => {
                     d.codex_radar = bad.codex_radar.clone();
@@ -118,7 +118,7 @@ fn fixture_frames_match_the_reviewed_one_bit_layouts() {
     for (name, hash) in [
         (
             "normal",
-            "33bb8d201b7375639d458296fe919522fbcb1eaf821359f1d67c9ae60289d6b5",
+            "ec5709901334b2303e653f5004522376a1cd6d8df8660bf705482815da64e9d8",
         ),
         (
             "single-window",
@@ -126,11 +126,11 @@ fn fixture_frames_match_the_reviewed_one_bit_layouts() {
         ),
         (
             "stale",
-            "b3e36f998602cd7bbfa329c5f5864ccb991722fd4f0ed4deb321467fada62069",
+            "6e231eed7dbbca723bf159e1303ed4937db7f2ade7b7112bbe4889fb1e782483",
         ),
         (
             "unavailable",
-            "a1fc17d289f5968c7ba756ff7af3d433eb3042795d8b49a76d34122c9f62d577",
+            "9463d05b1e9f87d58026a90004caead1e61117f1011e57f777f7ab4f5f9480ec",
         ),
     ] {
         assert_eq!(render(&fixture(name)).unwrap().sha256(), hash, "{name}");
