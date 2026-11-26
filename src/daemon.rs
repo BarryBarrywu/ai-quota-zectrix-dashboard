@@ -40,6 +40,7 @@ enum Reason {
     NoWeeklyWindow,
     SnapshotMissingOrInvalid,
     SnapshotExpired,
+    DesktopUsageUnavailable,
     RateLimited,
     RadarReadFailed,
     RadarHttpError,
@@ -132,6 +133,7 @@ pub struct Observers {
     snapshot: Option<PathBuf>,
     quotas: (Source<CodexQuota>, Source<AntigravityQuota>),
     radars: [RadarObserver; 2],
+    desktop: bool,
     antigravity_due: i64,
     codex_due: i64,
     report: Report,
@@ -154,7 +156,7 @@ impl Observers {
         let agy = agy.filter(|q| {
             [&q.gemini, &q.claude_gpt]
                 .into_iter()
-                .all(|w| w.remaining_percent <= 100 && w.resets_at > 0)
+                .all(|w| w.remaining_percent <= 100 && w.resets_at.is_none_or(|t| t > 0))
         });
         Self {
             dir: dir.into(),
@@ -165,18 +167,21 @@ impl Observers {
                 agy.map(Source::Stale).unwrap_or_default(),
             ),
             radars,
+            desktop: false,
             antigravity_due: i64::MIN,
             codex_due: i64::MIN,
             report: Report::default(),
         }
     }
     pub fn local(dir: &Path, program: &Path) -> Self {
-        Self::new(
+        let mut observers = Self::new(
             dir,
             program,
             std::env::var_os("AI_QUOTA_STATUSLINE_PATH").map(PathBuf::from),
             radar_pair(dir),
-        )
+        );
+        observers.desktop = true;
+        observers
     }
 
     fn poll(&mut self, now: i64, persist: bool) -> Result<()> {
@@ -218,17 +223,30 @@ impl Observers {
             }
             if now >= self.antigravity_due {
                 self.antigravity_due = now.saturating_add(600);
-                let (agy, reason) =
-                    antigravity::observe(self.snapshot.as_deref(), self.quotas.1.value());
+                let desktop = (self.desktop && self.snapshot.is_none())
+                    .then(|| antigravity::desktop_quota(!persist))
+                    .flatten();
+                let (agy, reason) = if let Some(q) = desktop {
+                    (Source::Current(q), None)
+                } else {
+                    antigravity::observe(self.snapshot.as_deref(), self.quotas.1.value())
+                };
                 let why = reason.map(|s| match s {
                     antigravity::SnapshotFailure::Expired => Reason::SnapshotExpired,
                     antigravity::SnapshotFailure::MissingOrInvalid => {
-                        Reason::SnapshotMissingOrInvalid
+                        if self.desktop && self.snapshot.is_none() {
+                            Reason::DesktopUsageUnavailable
+                        } else {
+                            Reason::SnapshotMissingOrInvalid
+                        }
                     }
                 });
                 self.report.antigravity_quota = Entry::observed(&agy, why);
                 if persist
-                    && !matches!(why, Some(Reason::SnapshotMissingOrInvalid))
+                    && !matches!(
+                        why,
+                        Some(Reason::SnapshotMissingOrInvalid | Reason::DesktopUsageUnavailable)
+                    )
                     && let Some(q) = agy.value()
                     && save(
                         &self.dir.join("antigravity-quota.json"),
@@ -306,7 +324,8 @@ fn display_deadline(d: &Dashboard) -> i64 {
             .into_iter()
             .flat_map(|q| [&q.gemini, &q.claude_gpt]),
     ) {
-        let remaining = w.resets_at.saturating_sub(now);
+        let Some(at) = w.resets_at else { continue };
+        let remaining = at.saturating_sub(now);
         if remaining >= 60 {
             let unit = if remaining >= 86400 { 3600 } else { 60 };
             next = next.min(now.saturating_add(remaining % unit + 1));

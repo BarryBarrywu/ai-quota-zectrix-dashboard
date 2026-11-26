@@ -130,7 +130,7 @@ fn fixture_frames_match_the_reviewed_one_bit_layouts() {
         ),
         (
             "unavailable",
-            "9463d05b1e9f87d58026a90004caead1e61117f1011e57f777f7ab4f5f9480ec",
+            "4f775419e15ec8b72ea39007e1322abba7cf56e1f1beafd453f0335d30d13cc6",
         ),
     ] {
         assert_eq!(render(&fixture(name)).unwrap().sha256(), hash, "{name}");

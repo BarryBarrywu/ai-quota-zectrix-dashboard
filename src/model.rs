@@ -45,13 +45,14 @@ pub struct AntigravityQuota {
 pub struct QuotaWindow {
     pub kind: WindowKind,
     pub remaining_percent: u8,
-    pub resets_at: i64,
+    pub resets_at: Option<i64>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowKind {
     Weekly,
     FiveHour,
+    Tied,
     Unspecified,
 }
 

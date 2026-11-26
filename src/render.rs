@@ -208,7 +208,10 @@ impl Frame {
             }
             self.label(
                 &LABEL,
-                &format!("重置 {}", countdown(now, w.resets_at, false)),
+                &format!(
+                    "重置 {}",
+                    countdown(now, w.resets_at.ok_or("missing Codex reset")?, false)
+                ),
                 8..206,
                 229,
                 Center,
@@ -230,6 +233,7 @@ impl Frame {
         let tag = match w.kind {
             WindowKind::Weekly => "周窗口",
             WindowKind::FiveHour => "5h窗口",
+            WindowKind::Tied => "双窗口",
             WindowKind::Unspecified => "窗口",
         };
         self.label(&BODY, tag, 330..382, y + 14, Right, PAPER)?;
@@ -244,7 +248,9 @@ impl Frame {
         self.label(&BODY, "重置", 318..380, y + 35, Right, INK)?;
         self.label(
             &BODY,
-            &countdown(now, w.resets_at, true),
+            &w.resets_at
+                .map(|t| countdown(now, t, true))
+                .unwrap_or_else(|| "--".into()),
             313..380,
             y + 55,
             Right,
@@ -301,7 +307,7 @@ impl Frame {
             self.rect(246, 119, 122, 52, INK);
             self.rect(248, 121, 118, 48, PAPER);
             self.label(&LABEL, "额度不可用", 250..364, 141, Center, INK)?;
-            self.label(&BODY, "等待配额快照", 250..364, 160, Center, INK)?;
+            self.label(&BODY, "等待读取额度", 250..364, 160, Center, INK)?;
         }
         Ok(())
     }

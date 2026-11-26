@@ -70,7 +70,7 @@ x = 0                        x = 214                     x = 400
     - Right: two-line stacked reset countdown (`重置` above `4天6h` / `2h40m`).
     - Bottom (`height: 8px`, `146px` wide): 1px `INK` bordered bar with solid `INK` fill proportional to `remaining_percent`.
 - **Unavailable / Offline State (Antigravity closed & no cache)**:
-  - Fill card bay (`x: 226..388, y: 56..234`) with 1-bit 5px dot-matrix pattern, centered inset box (`PAPER` fill, 2px `INK` border) reading `额度不可用` / `等待配额快照`.
+  - Fill card bay (`x: 226..388, y: 56..234`) with 1-bit 5px dot-matrix pattern, centered inset box (`PAPER` fill, 2px `INK` border) reading `额度不可用` / `等待读取额度`.
 
 ### C. Bottom Dual Reset-Radar Dock (`x: 0..400, y: 246..300`)
 - Separated by a full-width 2px `INK` horizontal rule at `y = 246`.

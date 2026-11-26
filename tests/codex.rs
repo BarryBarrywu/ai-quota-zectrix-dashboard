@@ -76,7 +76,7 @@ fn reads_weekly_quota_and_credits_on_one_owned_session() {
                 quota.weekly.resets_at,
                 quota.reset_credits
             ),
-            (80, 200, Some(3))
+            (80, Some(200), Some(3))
         );
     }
     assert_eq!(fake.starts(), 1);
@@ -168,6 +168,10 @@ fn live_preview_writes_a_weekly_quota_frame() {
             Command::new(env!("CARGO_BIN_EXE_ai-quota-zectrix-dashboard"))
                 .arg("live-preview")
                 .env("AI_QUOTA_DATA_DIR", fake.dir.path())
+                .env(
+                    "AI_QUOTA_STATUSLINE_PATH",
+                    fake.dir.path().join("no-snapshot")
+                )
                 .env("HTTPS_PROXY", "http://127.0.0.1:1")
                 .env("NO_PROXY", "")
                 .arg("--codex-program")

@@ -50,7 +50,10 @@ impl CodexObserver {
     }
 
     pub fn restore_cache(&mut self, cached: CodexQuota) {
-        if cached.weekly.kind == WindowKind::Weekly && cached.weekly.remaining_percent <= 100 {
+        if cached.weekly.kind == WindowKind::Weekly
+            && cached.weekly.remaining_percent <= 100
+            && cached.weekly.resets_at.is_some_and(|t| t > 0)
+        {
             self.cached = Some(cached);
         }
     }
@@ -149,7 +152,7 @@ fn parse_quota(value: Value) -> Result<Option<CodexQuota>, ()> {
             weekly = Some(QuotaWindow {
                 kind: WindowKind::Weekly,
                 remaining_percent: 100 - window.used_percent,
-                resets_at: window.resets_at.filter(|t| *t > 0).ok_or(())?,
+                resets_at: Some(window.resets_at.filter(|t| *t > 0).ok_or(())?),
             });
         }
     }
