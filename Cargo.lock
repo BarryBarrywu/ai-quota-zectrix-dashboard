@@ -15,6 +15,9 @@ dependencies = [
  "chrono",
  "clap",
  "embedded-graphics",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "image",
  "libc",
  "png",
@@ -25,6 +28,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
  "u8g2-fonts",
  "zeroize",
 ]
