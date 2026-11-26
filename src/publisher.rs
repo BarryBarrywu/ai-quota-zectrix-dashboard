@@ -64,7 +64,7 @@ impl Cloud {
             .filter(|d| {
                 matches!(
                     d.board.as_str(),
-                    "zectrix-s3-epaper-4.2" | "bread-compact-wifi"
+                    "zectrix-s3-epaper-4.2" | "bread-compact-wifi" | "极趣 S3 墨水屏 4.2寸"
                 )
             })
             .collect())

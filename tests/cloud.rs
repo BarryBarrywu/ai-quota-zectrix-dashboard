@@ -40,7 +40,7 @@ fn server(replies: Vec<&'static str>) -> (String, thread::JoinHandle<Vec<Vec<u8>
     (base, handle)
 }
 
-const DEVICES: &str = r#"{"code":0,"data":[{"deviceId":"legacy","board":"unsupported","alias":"Other"},{"deviceId":"note","board":"zectrix-s3-epaper-4.2","alias":"Desk"},{"deviceId":"compact","board":"bread-compact-wifi","alias":"Bedroom"}]}"#;
+const DEVICES: &str = r#"{"code":0,"data":[{"deviceId":"legacy","board":"unsupported","alias":"Other"},{"deviceId":"note","board":"zectrix-s3-epaper-4.2","alias":"Desk"},{"deviceId":"compact","board":"bread-compact-wifi","alias":"Bedroom"},{"deviceId":"localized","board":"极趣 S3 墨水屏 4.2寸","alias":"Studio"}]}"#;
 
 #[test]
 fn discovery_lists_only_compatible_boards() {
@@ -49,7 +49,7 @@ fn discovery_lists_only_compatible_boards() {
     let devices = cloud.devices().unwrap();
     assert_eq!(
         devices.iter().map(|d| d.alias.as_str()).collect::<Vec<_>>(),
-        ["Desk", "Bedroom"]
+        ["Desk", "Bedroom", "Studio"]
     );
     let req = String::from_utf8(server.join().unwrap().remove(0))
         .unwrap()
