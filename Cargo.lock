@@ -16,6 +16,7 @@ dependencies = [
  "clap",
  "embedded-graphics",
  "image",
+ "libc",
  "png",
  "serde",
  "serde_json",
