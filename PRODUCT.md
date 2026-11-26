@@ -43,3 +43,11 @@ A dedicated dual-AI quota and reset-signal desk instrument with zero task-title 
 2. **Honest 1-bit polarity**: Use black-vs-white inversion solely to establish primary/secondary hierarchy and to flag active reset schedules/confirmations—never for ornament.
 3. **Truthful degradation**: Stale caches and unavailable sources must remain visually unambiguous without disturbing healthy sections.
 4. **Zero noise on quiet days**: When no reset schedule or recent confirmation exists, the reset row recedes so quota numbers own the screen.
+
+## Companion commands
+
+`live-preview --output preview.png` gathers all four observations and writes a local image. On macOS with Accessibility access, the companion refreshes Antigravity’s Settings → Models panel and reads the remaining percentages shown by the signed-in desktop app. English labels were verified on 2.35.2. For a login agent, grant its installed executable Accessibility access in macOS System Settings → Privacy & Security → Accessibility. The daemon can open and close the panel while Antigravity is in the background. It leaves the foreground workspace and unrelated open settings pages alone. A failed observation retains the last validated values as stale. Desktop countdowns use the precision displayed by the app; a missing reset appears as `--`.
+
+Set `AI_QUOTA_STATUSLINE_PATH` to explicitly select a CLI capture in place of the desktop account. Both the official statusLine JSON and the structured report from `agy -p /usage --output-format json` are supported. Capture the latter with a CLI that supports the usage command in print mode (verified with 1.5.18). The CLI may report different buckets from the desktop session.
+
+`setup` previews the live frame and asks before uploading. `run` starts the companion in the foreground. `diagnostics` prints per-source and publisher health. On macOS, `launch-agent plist` prints the login agent definition, `launch-agent install` copies the executable into Application Support and starts it, and `launch-agent remove` stops and removes it. Installation captures the configured statusLine path and Codex executable path. Pass `--codex-program /absolute/path/to/codex` to select a specific executable.

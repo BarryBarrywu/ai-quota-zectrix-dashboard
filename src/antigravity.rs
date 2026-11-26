@@ -1,0 +1,260 @@
+use crate::model::{AntigravityQuota, QuotaWindow, Source, WindowKind};
+use chrono::DateTime;
+use serde_json::Value;
+use std::{fs::File, io::Read, path::Path, time::UNIX_EPOCH};
+
+const LIMIT: u64 = 2 * 1024 * 1024;
+
+fn json(reader: impl Read) -> Option<Value> {
+    let mut bytes = Vec::new();
+    reader.take(LIMIT + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= LIMIT).then(|| serde_json::from_slice(&bytes).ok())?
+}
+
+#[derive(Default)]
+struct Groups {
+    windows: [Option<(f64, QuotaWindow)>; 2],
+}
+impl Groups {
+    fn add(&mut self, identity: &str, window: &str, fraction: f64, resets_at: Option<i64>) {
+        let identity = identity.to_ascii_lowercase();
+        let index = if identity.contains("gemini") {
+            0
+        } else if [
+            "third_party",
+            "third-party",
+            "third party",
+            "3p",
+            "claude",
+            "gpt",
+        ]
+        .iter()
+        .any(|tag| identity.contains(tag))
+        {
+            1
+        } else {
+            return;
+        };
+        if !(0.0..=1.0).contains(&fraction) || resets_at.is_some_and(|t| t <= 0) {
+            return;
+        }
+        let label = window.to_ascii_lowercase();
+        let kind = if label.contains("week") {
+            WindowKind::Weekly
+        } else if ["five", "5h", "5-h", "5_h", "5 h"]
+            .iter()
+            .any(|tag| label.contains(tag))
+        {
+            WindowKind::FiveHour
+        } else {
+            WindowKind::Unspecified
+        };
+        if let Some((best, current)) = &mut self.windows[index]
+            && (*best < fraction
+                || (*best == fraction
+                    && current.resets_at.unwrap_or(i64::MAX) <= resets_at.unwrap_or(i64::MAX)))
+        {
+            if *best == fraction
+                && current.resets_at.is_none()
+                && resets_at.is_none()
+                && current.kind != kind
+            {
+                current.kind = WindowKind::Tied;
+            }
+            return;
+        }
+        self.windows[index] = Some((
+            fraction,
+            QuotaWindow {
+                kind,
+                remaining_percent: (fraction * 100.).round() as u8,
+                resets_at,
+            },
+        ));
+    }
+    fn finish(self) -> Option<AntigravityQuota> {
+        let [gemini, third] = self.windows;
+        Some(AntigravityQuota {
+            gemini: gemini?.1,
+            claude_gpt: third?.1,
+        })
+    }
+}
+fn reset(value: &Value) -> Option<i64> {
+    Some(
+        DateTime::parse_from_rfc3339(value.as_str()?)
+            .ok()?
+            .timestamp(),
+    )
+}
+fn snapshot(path: &Path) -> Option<Source<AntigravityQuota>> {
+    if !path.metadata().ok()?.is_file() {
+        return None;
+    }
+    let file = File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > LIMIT {
+        return None;
+    }
+    let captured = i64::try_from(
+        metadata
+            .modified()
+            .ok()?
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_secs(),
+    )
+    .ok()?;
+    let doc = json(file)?;
+    let mut groups = Groups::default();
+    let mut add_bucket = |id: &str, window: &str, bucket: &Value| {
+        if bucket["disabled"] == true {
+            return;
+        }
+        let Some(f) = bucket["remaining_fraction"].as_f64() else {
+            return;
+        };
+        let at = reset(&bucket["reset_time"]).filter(|t| *t > 0).or_else(|| {
+            captured.checked_add(i64::try_from(bucket["reset_in_seconds"].as_u64()?).ok()?)
+        });
+        groups.add(id, window, f, at);
+    };
+    if let Some(buckets) = doc["quota"].as_object() {
+        for (id, bucket) in buckets {
+            add_bucket(id, id, bucket);
+        }
+    } else if doc["status"] == "SUCCESS" && doc["command"]["name"] == "usage" {
+        for group in doc.pointer("/command/data/groups")?.as_array()? {
+            for bucket in group["buckets"].as_array()? {
+                add_bucket(bucket["id"].as_str()?, bucket["window"].as_str()?, bucket);
+            }
+        }
+    } else {
+        return None;
+    }
+    let value = groups.finish()?;
+    let age = metadata.modified().ok()?.elapsed().ok()?;
+    Some(if age.as_secs() > 20 * 60 {
+        Source::Stale(value)
+    } else {
+        Source::Current(value)
+    })
+}
+pub fn observe_snapshot(
+    path: &Path,
+    previous: Option<&AntigravityQuota>,
+) -> Source<AntigravityQuota> {
+    observe(Some(path), previous).0
+}
+
+#[derive(Clone, Copy)]
+pub enum SnapshotFailure {
+    Expired,
+    MissingOrInvalid,
+}
+
+pub fn observe(
+    path: Option<&Path>,
+    previous: Option<&AntigravityQuota>,
+) -> (Source<AntigravityQuota>, Option<SnapshotFailure>) {
+    match path.and_then(snapshot) {
+        Some(source @ Source::Current(_)) => (source, None),
+        Some(source) => (source, Some(SnapshotFailure::Expired)),
+        None => (
+            previous.cloned().map(Source::Stale).unwrap_or_default(),
+            Some(SnapshotFailure::MissingOrInvalid),
+        ),
+    }
+}
+
+fn desktop_reset(text: &str, now: i64) -> Option<i64> {
+    let (_, duration) = text.split_once("fully refresh in ")?;
+    let mut seconds = 0i64;
+    let duration = duration
+        .trim_end_matches('.')
+        .replace([','], " ")
+        .replace(" and ", " ");
+    let mut parts = duration.split_whitespace();
+    while let Some(amount) = parts.next() {
+        let n = amount.parse::<u32>().ok()?;
+        let unit = match parts.next()?.trim_end_matches('s') {
+            "day" => 86400,
+            "hour" => 3600,
+            "minute" => 60,
+            "second" => 1,
+            _ => return None,
+        };
+        seconds += i64::from(n) * unit;
+    }
+    (seconds > 0).then(|| now.checked_add(seconds)).flatten()
+}
+
+fn panel_quota(rows: &[Vec<String>; 2], now: i64) -> Option<AntigravityQuota> {
+    let mut groups = Groups::default();
+    for (id, lines) in ["gemini", "3p"].into_iter().zip(rows) {
+        let mut window = None;
+        let mut reset = None;
+        for line in lines {
+            match line.as_str() {
+                "Weekly Limit Remaining" | "Five Hour Limit Remaining" => {
+                    if window.is_some() {
+                        return None;
+                    }
+                    window = Some(line.as_str());
+                    reset = None;
+                }
+                value if value.ends_with('%') => {
+                    let percent = value.strip_suffix('%')?.parse::<u8>().ok()?;
+                    if percent > 100 {
+                        return None;
+                    }
+                    groups.add(id, window.take()?, f64::from(percent) / 100., reset);
+                }
+                detail if window.is_some() => reset = desktop_reset(detail, now),
+                _ => (),
+            }
+        }
+        if window.is_some() {
+            return None;
+        }
+    }
+    groups.finish()
+}
+
+#[cfg(target_os = "macos")]
+pub fn desktop_quota(interactive: bool) -> Option<AntigravityQuota> {
+    unsafe extern "C" {
+        fn agy_desktop_quota(out: *mut u8, capacity: usize, interactive: bool) -> i32;
+    }
+    let mut bytes = [0u8; 8192];
+    let len = unsafe { agy_desktop_quota(bytes.as_mut_ptr(), bytes.len(), interactive) };
+    let rows = serde_json::from_slice(bytes.get(..usize::try_from(len).ok()?)?).ok()?;
+    panel_quota(&rows, chrono::Utc::now().timestamp())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn desktop_quota(_: bool) -> Option<AntigravityQuota> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn desktop_uses_reported_percent_and_preserves_unspecified_resets() {
+        let rows = serde_json::from_str(r#"[["Weekly Limit Remaining","91%","Five Hour Limit Remaining","You have used some of your 5-hour limit, it will fully refresh in 1 hour, 4 minutes.","67%"],["Weekly Limit Remaining","100%","Five Hour Limit Remaining","100%"]]"#).unwrap();
+        let q = panel_quota(&rows, 100).unwrap();
+        assert_eq!(
+            (
+                q.gemini.remaining_percent,
+                q.gemini.kind,
+                q.gemini.resets_at
+            ),
+            (67, WindowKind::FiveHour, Some(3940))
+        );
+        assert_eq!(
+            (q.claude_gpt.remaining_percent, q.claude_gpt.resets_at),
+            (100, None)
+        );
+    }
+}

@@ -1,0 +1,42 @@
+{
+  "now": "2026-11-26T20:45:00+08:00",
+  "screen_updated_at": "2026-11-26T20:42:00+08:00",
+  "codex": {
+    "status": "current",
+    "value": {
+      "weekly": {
+        "kind": "weekly",
+        "remaining_percent": 100,
+        "resets_at": 1796064300
+      },
+      "reset_credits": 0
+    }
+  },
+  "antigravity": {
+    "status": "current",
+    "value": {
+      "gemini": {
+        "kind": "weekly",
+        "remaining_percent": 100,
+        "resets_at": 1796064300
+      },
+      "claude_gpt": {
+        "kind": "five_hour",
+        "remaining_percent": 0,
+        "resets_at": 1795706700
+      }
+    }
+  },
+  "codex_radar": {
+    "status": "current",
+    "value": {
+      "state": "no_schedule"
+    }
+  },
+  "antigravity_radar": {
+    "status": "current",
+    "value": {
+      "state": "no_schedule"
+    }
+  }
+}
