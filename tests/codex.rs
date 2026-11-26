@@ -246,3 +246,18 @@ fn healthy_server_can_finish_shutdown_on_stdin_eof() {
     ));
     assert!(fake.dir.path().join("closed").exists());
 }
+
+#[test]
+fn optional_short_window_does_not_hide_weekly_quota() {
+    let fake = Fake::new();
+    let mut observer = CodexObserver::new(&fake.program);
+    for primary in [
+        Value::Null,
+        json!({"windowDurationMins":null,"resetsAt":null,"usedPercent":0}),
+    ] {
+        let mut response = normal();
+        response["rateLimits"]["primary"] = primary;
+        fake.respond(&response);
+        assert!(matches!(observer.poll(), Source::Current(_)));
+    }
+}

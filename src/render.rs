@@ -300,8 +300,8 @@ impl Frame {
             }
             self.rect(246, 119, 122, 52, INK);
             self.rect(248, 121, 118, 48, PAPER);
-            self.label(&LABEL, "AGY 未运行", 250..364, 141, Center, INK)?;
-            self.label(&BODY, "等待本地连接", 250..364, 160, Center, INK)?;
+            self.label(&LABEL, "额度不可用", 250..364, 141, Center, INK)?;
+            self.label(&BODY, "等待配额快照", 250..364, 160, Center, INK)?;
         }
         Ok(())
     }
@@ -338,8 +338,12 @@ impl Frame {
                 (
                     format!("{provider} · 重置排期"),
                     format!(
-                        "{} {date}{}{}",
-                        scope.label(),
+                        "{}{date}{}{}",
+                        if provider == "AGY" {
+                            format!("{} ", scope.label())
+                        } else {
+                            String::new()
+                        },
                         time.format("%H:%M"),
                         if pending { "" } else { "截止" }
                     ),
@@ -358,7 +362,14 @@ impl Frame {
                     format!("{provider} · {status}"),
                     format!(
                         "{} · {}前",
-                        scope.label(),
+                        if provider == "AGY" {
+                            scope.label()
+                        } else {
+                            match kind {
+                                ResetKind::Banked => "Banked",
+                                ResetKind::Global => "Global",
+                            }
+                        },
                         countdown(*announced_at, d.now.timestamp(), true)
                     ),
                 )

@@ -132,7 +132,8 @@ pub struct Observers {
     snapshot: Option<PathBuf>,
     quotas: (Source<CodexQuota>, Source<AntigravityQuota>),
     radars: [RadarObserver; 2],
-    quota_due: i64,
+    antigravity_due: i64,
+    codex_due: i64,
     report: Report,
 }
 
@@ -164,7 +165,8 @@ impl Observers {
                 agy.map(Source::Stale).unwrap_or_default(),
             ),
             radars,
-            quota_due: i64::MIN,
+            antigravity_due: i64::MIN,
+            codex_due: i64::MIN,
             report: Report::default(),
         }
     }
@@ -186,9 +188,9 @@ impl Observers {
             if now >= agy_radar.next_poll_at() {
                 scope.spawn(move || agy_radar.poll(now));
             }
-            if now >= self.quota_due {
-                self.quota_due = now.saturating_add(600);
+            if now >= self.codex_due {
                 let quota = self.codex.poll();
+                self.codex_due = now.saturating_add(self.codex.retry_seconds().unwrap_or(600));
                 let why = self.codex.last_failure().map(|r| match r {
                     CodexFailure::Transport => Reason::Transport,
                     CodexFailure::Rejected => Reason::Rejected,
@@ -198,17 +200,24 @@ impl Observers {
                 self.report.codex_quota = Entry::observed(&quota, why);
                 if persist {
                     if let Source::Current(ref q) = quota {
-                        save(&self.dir.join("codex-quota.json"), &serde_json::to_vec(q)?)?;
+                        if save(&self.dir.join("codex-quota.json"), &serde_json::to_vec(q)?)
+                            .is_err()
+                        {
+                            self.report.codex_quota.reason = Some(Reason::CacheWriteFailed);
+                        }
                     } else if matches!(why, Some(Reason::NoWeeklyWindow)) {
                         match fs::remove_file(self.dir.join("codex-quota.json")) {
                             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                                return Err(e.into());
+                                self.report.codex_quota.reason = Some(Reason::CacheWriteFailed);
                             }
                             _ => (),
                         }
                     }
                 }
                 self.quotas.0 = quota;
+            }
+            if now >= self.antigravity_due {
+                self.antigravity_due = now.saturating_add(600);
                 let (agy, reason) =
                     antigravity::observe(self.snapshot.as_deref(), self.quotas.1.value());
                 let why = reason.map(|s| match s {
@@ -221,11 +230,13 @@ impl Observers {
                 if persist
                     && !matches!(why, Some(Reason::SnapshotMissingOrInvalid))
                     && let Some(q) = agy.value()
-                {
-                    save(
+                    && save(
                         &self.dir.join("antigravity-quota.json"),
                         &serde_json::to_vec(q)?,
-                    )?;
+                    )
+                    .is_err()
+                {
+                    self.report.antigravity_quota.reason = Some(Reason::CacheWriteFailed);
                 }
                 self.quotas.1 = agy;
             }
@@ -392,11 +403,14 @@ pub fn run(
                 reason,
             };
         }
-        save(
+        let _ = save(
             &dir.join("diagnostics.json"),
             &serde_json::to_vec(&observers.report)?,
-        )?;
-        let mut deadline = observers.quota_due.min(display_deadline(&d));
+        );
+        let mut deadline = observers
+            .codex_due
+            .min(observers.antigravity_due)
+            .min(display_deadline(&d));
         for r in &observers.radars {
             deadline = deadline
                 .min(r.next_poll_at())
@@ -411,4 +425,37 @@ pub fn run(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_reconnect_does_not_reread_snapshot_and_cache_error_is_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let snapshot = root.join("snapshot.json");
+        fs::write(
+            &snapshot,
+            include_bytes!("../tests/data/agy-statusline.json"),
+        )
+        .unwrap();
+        fs::create_dir(root.join("antigravity-quota.json")).unwrap();
+        let radars = [Provider::Codex, Provider::Antigravity].map(|provider| {
+            RadarObserver::loopback(provider, root.join("radar"), "127.0.0.1:1".parse().unwrap())
+                .unwrap()
+        });
+        let mut sources =
+            Observers::new(root, &root.join("missing"), Some(snapshot.clone()), radars);
+        sources.poll(1000, true).unwrap();
+        assert_eq!((sources.codex_due, sources.antigravity_due), (1001, 1600));
+        assert!(matches!(
+            sources.report.antigravity_quota.reason,
+            Some(Reason::CacheWriteFailed)
+        ));
+        fs::remove_file(snapshot).unwrap();
+        sources.poll(1001, true).unwrap();
+        assert!(matches!(sources.quotas.1, Source::Current(_)));
+    }
 }

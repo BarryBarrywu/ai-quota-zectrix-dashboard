@@ -101,7 +101,20 @@ fn publisher_observes_visible_countdowns_and_respects_persisted_deadline() {
     }
 }
 
-use ai_quota_zectrix_dashboard::setup::configure;
+use ai_quota_zectrix_dashboard::{publisher::Result as PublishResult, setup::configure_with_clock};
+
+fn configure(
+    dir: &std::path::Path,
+    cloud: &Cloud,
+    dashboard: &Dashboard,
+    input: &mut impl std::io::BufRead,
+    output: &mut impl Write,
+    save_key: impl FnOnce() -> PublishResult<()>,
+) -> PublishResult<bool> {
+    configure_with_clock(dir, cloud, dashboard, input, output, save_key, || {
+        dashboard.now
+    })
+}
 use std::fs;
 
 #[test]
@@ -234,4 +247,30 @@ fn a_running_publisher_respects_a_newly_configured_page() {
     let d = serde_json::from_str(include_str!("../fixtures/normal.json")).unwrap();
     assert!(publish_changed(dir.path(), &cloud, &stale, &d).is_err());
     assert!(!dir.path().join("publisher.json").exists());
+}
+
+#[test]
+fn elapsed_confirmation_requires_review_of_new_frame() {
+    use ai_quota_zectrix_dashboard::{model::Dashboard, setup::configure_with_clock};
+    let dir = tempfile::tempdir().unwrap();
+    let (base, server) = server(vec![DEVICES]);
+    let cloud = Cloud::new(&base, "fixture-key").unwrap();
+    let dashboard: Dashboard =
+        serde_json::from_str(include_str!("../fixtures/normal.json")).unwrap();
+    let mut clock = [dashboard.now, dashboard.now + chrono::Duration::minutes(2)].into_iter();
+    let mut output = Vec::new();
+    assert!(
+        !configure_with_clock(
+            dir.path(),
+            &cloud,
+            &dashboard,
+            &mut &b"1\n1\ny\nn\n"[..],
+            &mut output,
+            || panic!("declined"),
+            || clock.next().unwrap()
+        )
+        .unwrap()
+    );
+    assert!(String::from_utf8(output).unwrap().contains("时间已更新"));
+    assert_eq!(server.join().unwrap().len(), 1);
 }

@@ -227,3 +227,14 @@ fn malformed_event_fields_do_not_erase_last_confirmation() {
     assert_eq!(observer.last_error(), Some("invalid status"));
     worker.join().unwrap();
 }
+
+#[test]
+fn retry_after_http_date_sets_absolute_deadline() {
+    let (addr, worker) = server(vec!["HTTP/1.1 429 Busy\r\nRetry-After: Wed, 21 Oct 2015 07:28:00 GMT\r\nConnection: close\r\n\r\n".into()]);
+    let dir = tempfile::tempdir().unwrap();
+    let mut radar =
+        RadarObserver::loopback(Provider::Codex, dir.path().join("codex"), addr).unwrap();
+    radar.poll(100000);
+    assert_eq!(radar.next_poll_at(), 1445412480);
+    worker.join().unwrap();
+}
