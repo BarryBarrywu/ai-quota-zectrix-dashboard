@@ -167,6 +167,9 @@ fn live_preview_writes_a_weekly_quota_frame() {
         assert!(
             Command::new(env!("CARGO_BIN_EXE_ai-quota-zectrix-dashboard"))
                 .arg("live-preview")
+                .env("AI_QUOTA_DATA_DIR", fake.dir.path())
+                .env("HTTPS_PROXY", "http://127.0.0.1:1")
+                .env("NO_PROXY", "")
                 .arg("--codex-program")
                 .arg(&fake.program)
                 .arg("--output")

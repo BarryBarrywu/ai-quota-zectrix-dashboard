@@ -1,7 +1,7 @@
 use ai_quota_zectrix_dashboard::{
-    codex::CodexObserver,
-    model::{Dashboard, Source},
+    daemon::{Observers, diagnostics, run_local},
     render,
+    setup::{data_dir, run_setup},
 };
 use clap::{Parser, Subcommand};
 use std::{error::Error, fs, path::PathBuf};
@@ -13,7 +13,12 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Render live quota observations to a 1-bit NOTE4 PNG.
+    /// Observe both providers and publish changed frames to the configured NOTE4 page.
+    Run {
+        #[arg(long, default_value = "codex")]
+        codex_program: PathBuf,
+    },
+    /// Render both live quotas and public reset signals to a local PNG.
     LivePreview {
         #[arg(long)]
         output: PathBuf,
@@ -21,7 +26,17 @@ enum Command {
         codex_program: PathBuf,
     },
     /// Select a NOTE4 page and confirm its first upload.
-    Setup,
+    Setup {
+        #[arg(long, default_value = "codex")]
+        codex_program: PathBuf,
+    },
+    /// Report the health of each observation source and the publisher.
+    Diagnostics,
+    /// Manage the current user’s macOS LaunchAgent.
+    LaunchAgent {
+        #[command(subcommand)]
+        action: ai_quota_zectrix_dashboard::launch_agent::AgentAction,
+    },
     /// Render a normalized dashboard fixture to a 1-bit NOTE4 PNG.
     Preview {
         #[arg(long)]
@@ -32,32 +47,26 @@ enum Command {
 }
 fn main() -> Result<(), Box<dyn Error>> {
     let (dashboard, output) = match Cli::parse().command {
-        Command::Setup => {
-            use ai_quota_zectrix_dashboard::setup::{data_dir, run_setup};
-            let dashboard = Dashboard {
-                now: chrono::Local::now().fixed_offset(),
-                screen_updated_at: None,
-                codex: Default::default(),
-                antigravity: Default::default(),
-                codex_radar: Default::default(),
-                antigravity_radar: Default::default(),
-            };
-            run_setup(&data_dir()?, &dashboard)?;
+        Command::LaunchAgent { action } => {
+            return ai_quota_zectrix_dashboard::launch_agent::manage(action);
+        }
+        Command::Diagnostics => {
+            println!("{}", diagnostics(&data_dir()?)?);
             return Ok(());
+        }
+        Command::Run { codex_program } => {
+            return run_local(Observers::local(&data_dir()?, &codex_program));
+        }
+        Command::Setup { codex_program } => {
+            let dir = data_dir()?;
+            return run_setup(&dir, &Observers::local(&dir, &codex_program).live()?);
         }
         Command::Preview { input, output } => (serde_json::from_slice(&fs::read(input)?)?, output),
         Command::LivePreview {
             output,
             codex_program,
         } => (
-            Dashboard {
-                now: chrono::Local::now().fixed_offset(),
-                screen_updated_at: None,
-                codex: CodexObserver::new(codex_program).poll(),
-                antigravity: Source::Unavailable,
-                codex_radar: Source::Unavailable,
-                antigravity_radar: Source::Unavailable,
-            },
+            Observers::local(&data_dir()?, &codex_program).live()?,
             output,
         ),
     };

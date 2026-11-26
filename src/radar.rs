@@ -32,6 +32,7 @@ pub struct RadarObserver {
     provider: Provider,
     endpoint: String,
     path: PathBuf,
+    read_only: bool,
     events: Events,
     etag: Option<String>,
     retry_after: Option<i64>,
@@ -57,12 +58,13 @@ impl RadarObserver {
             provider,
             endpoint: format!("https://{host}/openapi/v1/status"),
             path,
+            read_only: false,
             events,
             etag,
             retry_after,
             checked: None,
             next_poll: retry_after.unwrap_or(i64::MIN),
-            error: None,
+            error: retry_after.map(|_| "rate limited"),
         }
     }
 
@@ -77,6 +79,11 @@ impl RadarObserver {
         let mut observer = Self::new(provider, path);
         observer.endpoint = format!("http://{addr}/openapi/v1/status");
         Ok(observer)
+    }
+
+    pub fn read_only(mut self) -> Self {
+        self.read_only = true;
+        self
     }
 
     pub fn view(&self, now: i64) -> Source<Radar> {
@@ -186,6 +193,9 @@ impl RadarObserver {
     }
 
     fn persist(&self) -> Result<(), &'static str> {
+        if self.read_only {
+            return Ok(());
+        }
         let parent = self
             .path
             .parent()
