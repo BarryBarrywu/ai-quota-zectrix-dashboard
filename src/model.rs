@@ -52,6 +52,7 @@ pub struct QuotaWindow {
 pub enum WindowKind {
     Weekly,
     FiveHour,
+    Unspecified,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

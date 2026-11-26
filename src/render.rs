@@ -230,6 +230,7 @@ impl Frame {
         let tag = match w.kind {
             WindowKind::Weekly => "周窗口",
             WindowKind::FiveHour => "5h窗口",
+            WindowKind::Unspecified => "窗口",
         };
         self.label(&BODY, tag, 330..382, y + 14, Right, PAPER)?;
         self.label(
