@@ -90,6 +90,8 @@ fn publisher_observes_visible_countdowns_and_respects_persisted_deadline() {
         }
     );
     d.now = start + chrono::Duration::seconds(60);
+    assert_eq!(send(&d), PublishOutcome::Unchanged);
+    d.now = start + chrono::Duration::seconds(900);
     assert_eq!(send(&d), PublishOutcome::Published);
     let requests = server.join().unwrap();
     for req in requests {

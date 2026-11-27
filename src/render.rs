@@ -230,13 +230,18 @@ impl Frame {
     ) -> Result<(), String> {
         self.rect(226, y, 162, 82, INK);
         self.rect(228, y + 18, 158, 62, PAPER);
-        self.label(&LABEL, name, 233..332, y + 14, Left, PAPER)?;
+        let name_end = if reading.is_some_and(|r| r.stale) {
+            307
+        } else {
+            330
+        };
+        self.label(&LABEL, name, 233..name_end, y + 14, Left, PAPER)?;
         let Some(reading) = reading else {
             self.label(&BODY, "暂不可用", 234..380, y + 51, Center, INK)?;
             return Ok(());
         };
         if reading.stale {
-            self.label(&BODY, "旧", 309..330, y + 14, Right, PAPER)?;
+            self.label(&BODY, "旧", 308..329, y + 14, Right, PAPER)?;
         }
         let w = &reading.window;
         if w.remaining_percent > 100 {
@@ -379,7 +384,7 @@ impl Frame {
                 (
                     format!("{provider} · {status}"),
                     format!(
-                        "{} · {}前",
+                        "{} · {}",
                         if provider == "AGY" {
                             scope.label()
                         } else {
@@ -388,7 +393,7 @@ impl Frame {
                                 ResetKind::Global => "Global",
                             }
                         },
-                        countdown(*announced_at, d.now.timestamp(), true)
+                        elapsed_label(*announced_at, d.now.timestamp())
                     ),
                 )
             }
@@ -422,6 +427,16 @@ impl Scope {
         }
     }
 }
+fn elapsed_label(from: i64, to: i64) -> String {
+    let minutes = to.saturating_sub(from).max(0) / 60;
+    if minutes >= 60 {
+        format!("{}h前", minutes / 60)
+    } else if minutes >= 10 {
+        format!("{}m前", (minutes / 10) * 10)
+    } else {
+        "刚刚".into()
+    }
+}
 fn countdown(from: i64, to: i64, compact: bool) -> String {
     let minutes = to.saturating_sub(from).max(0) / 60;
     let days = minutes / 1440;
@@ -429,12 +444,19 @@ fn countdown(from: i64, to: i64, compact: bool) -> String {
     if days > 0 {
         format!("{days}天{hours}{}", if compact { "h" } else { "小时" })
     } else if hours > 0 {
-        format!(
-            "{hours}{}{}{}",
-            if compact { "h" } else { "小时" },
-            minutes % 60,
-            if compact { "m" } else { "分" }
-        )
+        let mins = ((minutes % 60) / 15) * 15;
+        if mins == 0 {
+            format!("{hours}{}", if compact { "h" } else { "小时" })
+        } else {
+            format!(
+                "{hours}{}{mins}{}",
+                if compact { "h" } else { "小时" },
+                if compact { "m" } else { "分" }
+            )
+        }
+    } else if minutes >= 15 {
+        let mins = (minutes / 5) * 5;
+        format!("{mins}{}", if compact { "m" } else { "分" })
     } else {
         format!("{minutes}{}", if compact { "m" } else { "分" })
     }

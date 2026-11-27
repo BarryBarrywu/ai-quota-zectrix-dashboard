@@ -32,6 +32,7 @@ pub struct RadarObserver {
     provider: Provider,
     endpoint: String,
     path: PathBuf,
+    client: Option<Client>,
     read_only: bool,
     events: Events,
     etag: Option<String>,
@@ -54,10 +55,16 @@ impl RadarObserver {
         let (events, etag, retry_after) = cached
             .map(|c| (c.events, c.etag, c.retry_after))
             .unwrap_or_default();
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .ok();
         Self {
             provider,
             endpoint: format!("https://{host}/openapi/v1/status"),
             path,
+            client,
             read_only: false,
             events,
             etag,
@@ -132,11 +139,7 @@ impl RadarObserver {
     }
 
     fn fetch(&mut self, now: i64) -> Result<(), &'static str> {
-        let client = Client::builder()
-            .connect_timeout(Duration::from_secs(3))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| "http client unavailable")?;
+        let client = self.client.as_ref().ok_or("http client unavailable")?;
         let mut request = client.get(&self.endpoint).timeout(Duration::from_secs(5));
         if let Some(tag) = &self.etag {
             request = request.header(reqwest::header::IF_NONE_MATCH, tag);

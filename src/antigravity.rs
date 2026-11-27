@@ -349,20 +349,9 @@ impl Observer {
         );
         if self.verified != Some(identity) {
             let out = cli_output(path, &["--version"], 5)?;
-            let parts: Vec<u32> = std::str::from_utf8(&out)
-                .ok()
-                .and_then(|s| {
-                    s.trim()
-                        .split('.')
-                        .map(str::parse)
-                        .collect::<Result<_, _>>()
-                        .ok()
-                })
+            let version = parse_semver(std::str::from_utf8(&out).ok().unwrap_or_default())
                 .ok_or(Failure::InvalidVersion)?;
-            if parts.len() != 3 {
-                return Err(Failure::InvalidVersion);
-            }
-            if parts.as_slice() < [1, 1, 11].as_slice() {
+            if version < (1, 1, 11) {
                 return Err(Failure::UnsupportedVersion);
             }
             self.verified = Some(identity);
@@ -464,6 +453,27 @@ impl Observer {
         };
         (source, [g, c], delay)
     }
+}
+fn parse_semver(raw: &str) -> Option<(u32, u32, u32)> {
+    for token in raw.split_whitespace() {
+        let candidate = token
+            .trim_start_matches('v')
+            .split(['-', '+'])
+            .next()
+            .unwrap_or_default();
+        let mut parts = candidate.split('.');
+        let (Some(a), Some(b), Some(c), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if let (Ok(major), Ok(minor), Ok(patch)) =
+            (a.parse::<u32>(), b.parse::<u32>(), c.parse::<u32>())
+        {
+            return Some((major, minor, patch));
+        }
+    }
+    None
 }
 pub fn cli_quota(program: &Path) -> Option<AntigravityQuota> {
     Observer::default()

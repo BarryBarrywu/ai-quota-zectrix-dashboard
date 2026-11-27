@@ -246,3 +246,22 @@ fn transient_errors_back_off_and_permanent_errors_are_sanitized() {
         [Some(Failure::MissingBinary); 2]
     );
 }
+
+#[test]
+fn cli_accepts_prefixed_and_prerelease_semver_strings() {
+    use ai_quota_zectrix_dashboard::antigravity::Observer;
+    use serde_json::json;
+    let f = Script::new();
+    f.report(json!([
+        {"id":"gemini-weekly","window":"weekly","remaining_fraction":0.80},
+        {"id":"3p-5h","window":"5h","remaining_fraction":0.60}
+    ]));
+    fs::write(f.dir.path().join("version"), "agy v1.6.0-beta.2+abc123\n").unwrap();
+    let mut observer = Observer::default();
+    let (source, errors, delay) = observer.poll(None, Some(&f.bin), None, 1000);
+    assert_eq!(errors, [None, None]);
+    assert_eq!(delay, 600);
+    let q = source.value().unwrap();
+    assert_eq!(q.gemini.as_ref().unwrap().window.remaining_percent, 80);
+    assert_eq!(q.claude_gpt.as_ref().unwrap().window.remaining_percent, 60);
+}

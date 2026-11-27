@@ -118,15 +118,15 @@ fn fixture_frames_match_the_reviewed_one_bit_layouts() {
     for (name, hash) in [
         (
             "normal",
-            "ec5709901334b2303e653f5004522376a1cd6d8df8660bf705482815da64e9d8",
+            "92bdd01d81564509797a2e37f49731cbdaa7618bbb9a4ecba5035c57bb259bb8",
         ),
         (
             "single-window",
-            "332daffc693e501b3274c4e9b6f0042198b4f2b8a0be1761244cf867ac082bdb",
+            "4e5741463f93e7d1dac529d240cbff7e3c8e4ed7e993ad7dd04da72f001f87ae",
         ),
         (
             "stale",
-            "6e231eed7dbbca723bf159e1303ed4937db7f2ade7b7112bbe4889fb1e782483",
+            "34cc067b5c556d5cea8ee64c45474d5a9fb9bad5e1ed5015745d9aedd53be056",
         ),
         (
             "unavailable",

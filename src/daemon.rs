@@ -223,83 +223,99 @@ impl Observers {
 
     fn poll(&mut self, now: i64, persist: bool) -> Result<()> {
         let [codex_radar, agy_radar] = &mut self.radars;
-        thread::scope(|scope| -> Result<()> {
+        let poll_codex = now >= self.codex_due;
+        let poll_agy = now >= self.antigravity_due;
+        let codex_observer = &mut self.codex;
+        let agy_observer = &mut self.agy_observer;
+        let snapshot_path = self.snapshot.as_deref();
+        let agy_bin = self.agy.as_deref();
+        let prev_agy = self.quotas.1.value();
+
+        let (codex_res, agy_res) = thread::scope(|scope| {
             if now >= codex_radar.next_poll_at() {
                 scope.spawn(move || codex_radar.poll(now));
             }
             if now >= agy_radar.next_poll_at() {
                 scope.spawn(move || agy_radar.poll(now));
             }
-            if now >= self.codex_due {
-                let quota = self.codex.poll();
-                self.codex_due = now.saturating_add(self.codex.retry_seconds().unwrap_or(600));
-                let why = self.codex.last_failure().map(|r| match r {
-                    CodexFailure::Transport => Reason::Transport,
-                    CodexFailure::Rejected => Reason::Rejected,
-                    CodexFailure::NoWeeklyWindow => Reason::NoWeeklyWindow,
-                    CodexFailure::InvalidQuota => Reason::InvalidQuota,
-                });
-                self.report.codex_quota = Entry::observed(&quota, why);
-                if persist {
-                    if let Source::Current(ref q) = quota {
-                        if save(&self.dir.join("codex-quota.json"), &serde_json::to_vec(q)?)
-                            .is_err()
-                        {
+            let codex_handle = poll_codex.then(|| {
+                scope.spawn(move || {
+                    let quota = codex_observer.poll();
+                    let retry = codex_observer.retry_seconds().unwrap_or(600);
+                    let failure = codex_observer.last_failure();
+                    (quota, retry, failure)
+                })
+            });
+            let agy_handle = poll_agy.then(|| {
+                scope.spawn(move || {
+                    let started = std::time::Instant::now();
+                    let result = agy_observer.poll(snapshot_path, agy_bin, prev_agy, now);
+                    (result, started.elapsed().as_secs() as i64)
+                })
+            });
+            (
+                codex_handle.map(|h| h.join().expect("codex poll thread")),
+                agy_handle.map(|h| h.join().expect("antigravity poll thread")),
+            )
+        });
+
+        if let Some((quota, retry, failure)) = codex_res {
+            self.codex_due = now.saturating_add(retry);
+            let why = failure.map(|r| match r {
+                CodexFailure::Transport => Reason::Transport,
+                CodexFailure::Rejected => Reason::Rejected,
+                CodexFailure::NoWeeklyWindow => Reason::NoWeeklyWindow,
+                CodexFailure::InvalidQuota => Reason::InvalidQuota,
+            });
+            self.report.codex_quota = Entry::observed(&quota, why);
+            if persist {
+                if let Source::Current(ref q) = quota {
+                    if save(&self.dir.join("codex-quota.json"), &serde_json::to_vec(q)?).is_err() {
+                        self.report.codex_quota.reason = Some(Reason::CacheWriteFailed);
+                    }
+                } else if matches!(why, Some(Reason::NoWeeklyWindow)) {
+                    match fs::remove_file(self.dir.join("codex-quota.json")) {
+                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                             self.report.codex_quota.reason = Some(Reason::CacheWriteFailed);
                         }
-                    } else if matches!(why, Some(Reason::NoWeeklyWindow)) {
-                        match fs::remove_file(self.dir.join("codex-quota.json")) {
-                            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                                self.report.codex_quota.reason = Some(Reason::CacheWriteFailed);
-                            }
-                            _ => (),
-                        }
+                        _ => (),
                     }
                 }
-                self.quotas.0 = quota;
             }
-            if now >= self.antigravity_due {
-                let started = std::time::Instant::now();
-                let (agy, [g, c], delay) = self.agy_observer.poll(
-                    self.snapshot.as_deref(),
-                    self.agy.as_deref(),
-                    self.quotas.1.value(),
-                    now,
-                );
-                self.antigravity_due = now
-                    .saturating_add(started.elapsed().as_secs() as i64)
-                    .saturating_add(delay);
-                let val = agy.value();
-                self.report.gemini = GroupDiagnostic::new(val.and_then(|q| q.gemini.as_ref()), g);
-                self.report.claude_gpt =
-                    GroupDiagnostic::new(val.and_then(|q| q.claude_gpt.as_ref()), c);
-                let mut summary = Entry::observed(&agy, None);
-                if g.is_some() || c.is_some() {
-                    if val.is_some() {
-                        summary.status = Status::Stale;
-                    }
-                    summary.reason = Some(if self.agy.is_some() {
-                        Reason::CliUsageUnavailable
-                    } else {
-                        Reason::SnapshotMissingOrInvalid
-                    });
+            self.quotas.0 = quota;
+        }
+        if let Some(((agy, [g, c], delay), elapsed)) = agy_res {
+            self.antigravity_due = now.saturating_add(elapsed).saturating_add(delay);
+            let val = agy.value();
+            self.report.gemini = GroupDiagnostic::new(val.and_then(|q| q.gemini.as_ref()), g);
+            self.report.claude_gpt =
+                GroupDiagnostic::new(val.and_then(|q| q.claude_gpt.as_ref()), c);
+            let mut summary = Entry::observed(&agy, None);
+            if g.is_some() || c.is_some() {
+                if val.is_some() {
+                    summary.status = Status::Stale;
                 }
-                self.report.antigravity_quota = summary;
-                if persist
-                    && self.quotas.1.value() != val
-                    && let Some(q) = agy.value()
-                    && save(
-                        &self.dir.join("antigravity-quota.json"),
-                        &serde_json::to_vec(q)?,
-                    )
-                    .is_err()
-                {
-                    self.report.antigravity_quota.reason = Some(Reason::CacheWriteFailed);
-                }
-                self.quotas.1 = agy;
+                summary.reason = Some(if self.agy.is_some() {
+                    Reason::CliUsageUnavailable
+                } else {
+                    Reason::SnapshotMissingOrInvalid
+                });
             }
-            Ok(())
-        })
+            self.report.antigravity_quota = summary;
+            if persist
+                && self.quotas.1.value() != val
+                && let Some(q) = agy.value()
+                && save(
+                    &self.dir.join("antigravity-quota.json"),
+                    &serde_json::to_vec(q)?,
+                )
+                .is_err()
+            {
+                self.report.antigravity_quota.reason = Some(Reason::CacheWriteFailed);
+            }
+            self.quotas.1 = agy;
+        }
+        Ok(())
     }
 
     fn dashboard(&mut self, now: DateTime<FixedOffset>) -> Dashboard {
@@ -369,7 +385,15 @@ fn display_deadline(d: &Dashboard) -> i64 {
         let Some(at) = w.resets_at else { continue };
         let remaining = at.saturating_sub(now);
         if remaining >= 60 {
-            let unit = if remaining >= 86400 { 3600 } else { 60 };
+            let unit = if remaining >= 86400 {
+                3600
+            } else if remaining >= 3600 {
+                900
+            } else if remaining >= 900 {
+                300
+            } else {
+                60
+            };
             next = next.min(now.saturating_add(remaining % unit + 1));
         }
     }
@@ -380,7 +404,9 @@ fn display_deadline(d: &Dashboard) -> i64 {
         match r {
             Radar::Scheduled { starts_at, .. } if *starts_at > now => next = next.min(*starts_at),
             Radar::Confirmed { announced_at, .. } => {
-                next = next.min(now + 60 - (now - announced_at).rem_euclid(60))
+                let elapsed = now.saturating_sub(*announced_at).max(0);
+                let unit = if elapsed >= 3600 { 3600 } else { 600 };
+                next = next.min(now + unit - (elapsed % unit));
             }
             _ => (),
         }
@@ -421,6 +447,7 @@ pub fn run(
         let _ = stop.send(());
     })?;
     let mut retry = i64::MIN;
+    let mut last_diagnostics = Vec::new();
     loop {
         observers.poll(now().timestamp(), true)?;
         if stopped.try_recv().is_ok() {
@@ -464,10 +491,12 @@ pub fn run(
                 reason,
             };
         }
-        let _ = save(
-            &dir.join("diagnostics.json"),
-            &serde_json::to_vec(&observers.report)?,
-        );
+        let diagnostics_bytes = serde_json::to_vec(&observers.report)?;
+        if diagnostics_bytes != last_diagnostics
+            && save(&dir.join("diagnostics.json"), &diagnostics_bytes).is_ok()
+        {
+            last_diagnostics = diagnostics_bytes;
+        }
         let mut deadline = observers
             .codex_due
             .min(observers.antigravity_due)

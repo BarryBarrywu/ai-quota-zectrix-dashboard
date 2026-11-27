@@ -56,7 +56,12 @@ fn definition(binary: &Path, dir: &Path, codex: &Path) -> Result<Vec<u8>> {
     if let Some(path) = crate::antigravity::cli_path() {
         vars.insert("AI_QUOTA_AGY_BIN", std::path::absolute(path)?);
     }
-    if let Ok(proxy) = env::var("AI_QUOTA_AGY_PROXY") {
+    if let Some(proxy) = env::var("AI_QUOTA_AGY_PROXY").ok().or_else(|| {
+        ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
+            .into_iter()
+            .find_map(|k| env::var(k).ok())
+            .filter(|v| !v.trim().is_empty())
+    }) {
         let url = reqwest::Url::parse(&proxy).map_err(|_| "invalid Antigravity proxy URL")?;
         if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h")
             || url.host().is_none()
