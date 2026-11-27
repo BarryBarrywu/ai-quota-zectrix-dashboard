@@ -40,7 +40,7 @@ enum Reason {
     NoWeeklyWindow,
     SnapshotMissingOrInvalid,
     SnapshotExpired,
-    DesktopUsageUnavailable,
+    CliUsageUnavailable,
     RateLimited,
     RadarReadFailed,
     RadarHttpError,
@@ -133,7 +133,7 @@ pub struct Observers {
     snapshot: Option<PathBuf>,
     quotas: (Source<CodexQuota>, Source<AntigravityQuota>),
     radars: [RadarObserver; 2],
-    desktop: bool,
+    agy: Option<PathBuf>,
     antigravity_due: i64,
     codex_due: i64,
     report: Report,
@@ -167,7 +167,7 @@ impl Observers {
                 agy.map(Source::Stale).unwrap_or_default(),
             ),
             radars,
-            desktop: false,
+            agy: None,
             antigravity_due: i64::MIN,
             codex_due: i64::MIN,
             report: Report::default(),
@@ -180,7 +180,9 @@ impl Observers {
             std::env::var_os("AI_QUOTA_STATUSLINE_PATH").map(PathBuf::from),
             radar_pair(dir),
         );
-        observers.desktop = true;
+        observers.agy = std::env::var_os("AI_QUOTA_AGY_BIN")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/bin/agy")));
         observers
     }
 
@@ -223,10 +225,12 @@ impl Observers {
             }
             if now >= self.antigravity_due {
                 self.antigravity_due = now.saturating_add(600);
-                let desktop = (self.desktop && self.snapshot.is_none())
-                    .then(|| antigravity::desktop_quota(!persist))
-                    .flatten();
-                let (agy, reason) = if let Some(q) = desktop {
+                let live = self
+                    .agy
+                    .as_deref()
+                    .filter(|_| self.snapshot.is_none())
+                    .and_then(antigravity::cli_quota);
+                let (agy, reason) = if let Some(q) = live {
                     (Source::Current(q), None)
                 } else {
                     antigravity::observe(self.snapshot.as_deref(), self.quotas.1.value())
@@ -234,8 +238,8 @@ impl Observers {
                 let why = reason.map(|s| match s {
                     antigravity::SnapshotFailure::Expired => Reason::SnapshotExpired,
                     antigravity::SnapshotFailure::MissingOrInvalid => {
-                        if self.desktop && self.snapshot.is_none() {
-                            Reason::DesktopUsageUnavailable
+                        if self.agy.is_some() && self.snapshot.is_none() {
+                            Reason::CliUsageUnavailable
                         } else {
                             Reason::SnapshotMissingOrInvalid
                         }
@@ -245,7 +249,7 @@ impl Observers {
                 if persist
                     && !matches!(
                         why,
-                        Some(Reason::SnapshotMissingOrInvalid | Reason::DesktopUsageUnavailable)
+                        Some(Reason::SnapshotMissingOrInvalid | Reason::CliUsageUnavailable)
                     )
                     && let Some(q) = agy.value()
                     && save(

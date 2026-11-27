@@ -31,7 +31,7 @@ A dedicated dual-AI quota and reset-signal desk instrument with zero task-title 
 
 ## Capabilities and Constraints
 
-- Four independent sources: Codex quota (`codex app-server --stdio`, displaying the **Weekly** quota window only—no 5-hour window), Codex reset signal (`didcodexreset.com/openapi/v1/status`), Antigravity quota (local `language_server` Connect-RPC with `statusLine` JSON fallback), and Antigravity reset signal (`agyreset.com/openapi/v1/status`).
+- Four independent sources: Codex quota (`codex app-server --stdio`, displaying the **Weekly** quota window only—no 5-hour window), Codex reset signal (`didcodexreset.com/openapi/v1/status`), Antigravity quota (official CLI `/usage` report or a configured `statusLine` JSON capture), and Antigravity reset signal (`agyreset.com/openapi/v1/status`).
 - Any single source may be stale or unavailable independently; missing data is never replaced with `0%`.
 - Antigravity displays two canonical model groups (`GEMINI` and `CLAUDE/GPT`, mapped from upstream `gemini` and `third_party`/`3p` scopes), each showing its most constrained window (lowest remaining %, tie-breaking by sooner reset time).
 - Reset signals follow one unified 3-tier priority: pending schedule > 24h confirmed reset (with affected scope) > fresh no-schedule > signal unavailable.
@@ -46,8 +46,6 @@ A dedicated dual-AI quota and reset-signal desk instrument with zero task-title 
 
 ## Companion commands
 
-`live-preview --output preview.png` gathers all four observations and writes a local image. On macOS with Accessibility access, the companion refreshes Antigravity’s Settings → Models panel and reads the remaining percentages shown by the signed-in desktop app. English labels were verified on 2.35.2. For a login agent, grant its installed executable Accessibility access in macOS System Settings → Privacy & Security → Accessibility. The daemon can open and close the panel while Antigravity is in the background. It leaves the foreground workspace and unrelated open settings pages alone. A failed observation retains the last validated values as stale. Desktop countdowns use the precision displayed by the app; a missing reset appears as `--`.
-
-Set `AI_QUOTA_STATUSLINE_PATH` to explicitly select a CLI capture in place of the desktop account. Both the official statusLine JSON and the structured report from `agy -p /usage --output-format json` are supported. Capture the latter with a CLI that supports the usage command in print mode (verified with 1.5.18). The CLI may report different buckets from the desktop session.
+`live-preview --output preview.png` gathers all four observations and writes a local image. The companion reads Antigravity quota from the signed-in official CLI with `agy -p /usage --output-format json` (verified on 1.5.18). It runs `~/.local/bin/agy` by default. Set `AI_QUOTA_AGY_BIN` to select another executable, or `AI_QUOTA_STATUSLINE_PATH` to read an existing statusLine or usage report capture. Missing or invalid observations retain cached values marked stale. The CLI can report different quota buckets from the desktop app.
 
 `setup` previews the live frame and asks before uploading. `run` starts the companion in the foreground. `diagnostics` prints per-source and publisher health. On macOS, `launch-agent plist` prints the login agent definition, `launch-agent install` copies the executable into Application Support and starts it, and `launch-agent remove` stops and removes it. Installation captures the configured statusLine path and Codex executable path. Pass `--codex-program /absolute/path/to/codex` to select a specific executable.

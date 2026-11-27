@@ -66,3 +66,24 @@ fn cli_usage_report_handles_absent_reset_and_tied_full_windows() {
     assert_eq!(q.claude_gpt.kind, WindowKind::Tied);
     assert_eq!(q.claude_gpt.resets_at, None);
 }
+
+#[test]
+fn live_cli_reads_a_structured_usage_command() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("agy");
+    fs::write(&program, r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo 1.5.18; exit; fi
+[ "$*" = "-p /usage --output-format json --print-timeout 20s" ] || exit 1
+echo '{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"buckets":[{"id":"gemini-weekly","window":"weekly","remaining_fraction":0.76},{"id":"3p-weekly","window":"weekly","remaining_fraction":1}]}]}}}'
+"#).unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+    let quota = ai_quota_zectrix_dashboard::antigravity::cli_quota(&program).unwrap();
+    assert_eq!(
+        (
+            quota.gemini.remaining_percent,
+            quota.claude_gpt.remaining_percent
+        ),
+        (76, 100)
+    );
+}

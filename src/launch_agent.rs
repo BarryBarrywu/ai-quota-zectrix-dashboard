@@ -53,6 +53,9 @@ fn definition(binary: &Path, dir: &Path, codex: &Path) -> Result<Vec<u8>> {
     if let Some(path) = env::var_os("AI_QUOTA_STATUSLINE_PATH") {
         vars.insert("AI_QUOTA_STATUSLINE_PATH", std::path::absolute(path)?);
     }
+    if let Some(path) = env::var_os("AI_QUOTA_AGY_BIN") {
+        vars.insert("AI_QUOTA_AGY_BIN", std::path::absolute(path)?);
+    }
     let agent = Agent {
         label: LABEL,
         program_arguments: vec![
