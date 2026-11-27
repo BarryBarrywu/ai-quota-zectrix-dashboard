@@ -27,9 +27,7 @@ impl Frame {
     }
 }
 
-use crate::model::{
-    AntigravityQuota, CodexQuota, QuotaWindow, Radar, ResetKind, Scope, Source, WindowKind,
-};
+use crate::model::{AntigravityQuota, CodexQuota, Radar, ResetKind, Scope, Source, WindowKind};
 use chrono::{Datelike, TimeZone};
 use embedded_graphics::{
     draw_target::DrawTargetExt,
@@ -223,13 +221,27 @@ impl Frame {
         }
         Ok(())
     }
-    fn card(&mut self, y: i32, name: &str, w: &QuotaWindow, now: i64) -> Result<(), String> {
-        if w.remaining_percent > 100 {
-            return Err("invalid Antigravity percentage".into());
-        }
+    fn card(
+        &mut self,
+        y: i32,
+        name: &str,
+        reading: Option<&crate::model::GroupReading>,
+        now: i64,
+    ) -> Result<(), String> {
         self.rect(226, y, 162, 82, INK);
         self.rect(228, y + 18, 158, 62, PAPER);
         self.label(&LABEL, name, 233..332, y + 14, Left, PAPER)?;
+        let Some(reading) = reading else {
+            self.label(&BODY, "暂不可用", 234..380, y + 51, Center, INK)?;
+            return Ok(());
+        };
+        if reading.stale {
+            self.label(&BODY, "旧", 309..330, y + 14, Right, PAPER)?;
+        }
+        let w = &reading.window;
+        if w.remaining_percent > 100 {
+            return Err("invalid Antigravity percentage".into());
+        }
         let tag = match w.kind {
             WindowKind::Weekly => "周窗口",
             WindowKind::FiveHour => "5h窗口",
@@ -296,8 +308,8 @@ impl Frame {
             self.label(&BODY, "旧", 322..340, 46, Center, INK)?;
         }
         if let Some(q) = source.value() {
-            self.card(58, "GEMINI", &q.gemini, now.timestamp())?;
-            self.card(150, "CLAUDE/GPT", &q.claude_gpt, now.timestamp())?;
+            self.card(58, "GEMINI", q.gemini.as_ref(), now.timestamp())?;
+            self.card(150, "CLAUDE/GPT", q.claude_gpt.as_ref(), now.timestamp())?;
         } else {
             for y in (56..234).step_by(5) {
                 for x in (226..388).step_by(5) {

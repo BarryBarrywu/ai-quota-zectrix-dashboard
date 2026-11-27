@@ -168,6 +168,7 @@ fn live_preview_writes_a_weekly_quota_frame() {
             Command::new(env!("CARGO_BIN_EXE_ai-quota-zectrix-dashboard"))
                 .arg("live-preview")
                 .env("AI_QUOTA_DATA_DIR", fake.dir.path())
+                .env("AI_QUOTA_AGY_BIN", fake.dir.path().join("missing-agy"))
                 .env(
                     "AI_QUOTA_STATUSLINE_PATH",
                     fake.dir.path().join("no-snapshot")

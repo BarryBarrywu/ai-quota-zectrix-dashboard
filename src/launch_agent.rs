@@ -53,8 +53,22 @@ fn definition(binary: &Path, dir: &Path, codex: &Path) -> Result<Vec<u8>> {
     if let Some(path) = env::var_os("AI_QUOTA_STATUSLINE_PATH") {
         vars.insert("AI_QUOTA_STATUSLINE_PATH", std::path::absolute(path)?);
     }
-    if let Some(path) = env::var_os("AI_QUOTA_AGY_BIN") {
+    if let Some(path) = crate::antigravity::cli_path() {
         vars.insert("AI_QUOTA_AGY_BIN", std::path::absolute(path)?);
+    }
+    if let Ok(proxy) = env::var("AI_QUOTA_AGY_PROXY") {
+        let url = reqwest::Url::parse(&proxy).map_err(|_| "invalid Antigravity proxy URL")?;
+        if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h")
+            || url.host().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || !matches!(url.path(), "" | "/")
+        {
+            return Err("use a proxy address without credentials, path, query or fragment".into());
+        }
+        vars.insert("AI_QUOTA_AGY_PROXY", proxy.into());
     }
     let agent = Agent {
         label: LABEL,

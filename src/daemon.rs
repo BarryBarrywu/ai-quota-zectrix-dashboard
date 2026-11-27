@@ -78,9 +78,36 @@ impl Entry {
 }
 
 #[derive(Default, Serialize, Deserialize)]
+struct GroupDiagnostic {
+    status: Status,
+    last_success: Option<i64>,
+    reason: Option<antigravity::Failure>,
+}
+impl GroupDiagnostic {
+    fn new(
+        reading: Option<&crate::model::GroupReading>,
+        reason: Option<antigravity::Failure>,
+    ) -> Self {
+        Self {
+            status: match reading {
+                None => Status::Unavailable,
+                Some(r) if r.stale => Status::Stale,
+                Some(_) => Status::Current,
+            },
+            last_success: reading.and_then(|r| r.last_success),
+            reason,
+        }
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
 struct Report {
     codex_quota: Entry,
     antigravity_quota: Entry,
+    #[serde(default)]
+    gemini: GroupDiagnostic,
+    #[serde(default)]
+    claude_gpt: GroupDiagnostic,
     codex_radar: Entry,
     antigravity_radar: Entry,
     publisher: Entry,
@@ -112,12 +139,11 @@ pub fn diagnostics(dir: &Path) -> Result<String> {
                 .flatten()
                 .is_some(),
         );
-        report.antigravity_quota = stopped(
-            read_optional::<AntigravityQuota>(&dir.join("antigravity-quota.json"))
-                .ok()
-                .flatten()
-                .is_some(),
-        );
+        let cached = load_antigravity_cache(dir);
+        report.antigravity_quota = stopped(cached.is_some());
+        report.gemini = GroupDiagnostic::new(cached.as_ref().and_then(|q| q.gemini.as_ref()), None);
+        report.claude_gpt =
+            GroupDiagnostic::new(cached.as_ref().and_then(|q| q.claude_gpt.as_ref()), None);
         let [codex, agy] = radar_pair(dir);
         let now = Local::now().timestamp();
         report.codex_radar = stopped(codex.view(now).value().is_some());
@@ -127,6 +153,22 @@ pub fn diagnostics(dir: &Path) -> Result<String> {
     Ok(serde_json::to_string_pretty(&report)?)
 }
 
+fn load_antigravity_cache(dir: &Path) -> Option<AntigravityQuota> {
+    let path = dir.join("antigravity-quota.json");
+    let mut q = read_optional::<AntigravityQuota>(&path).ok()??;
+    for group in [&mut q.gemini, &mut q.claude_gpt] {
+        if let Some(r) = group
+            && r.window.remaining_percent <= 100
+            && r.window.resets_at.is_none_or(|t| t > 0)
+        {
+            r.stale = true;
+        } else {
+            *group = None;
+        }
+    }
+    (q.gemini.is_some() || q.claude_gpt.is_some()).then_some(q)
+}
+
 pub struct Observers {
     dir: PathBuf,
     codex: CodexObserver,
@@ -134,6 +176,7 @@ pub struct Observers {
     quotas: (Source<CodexQuota>, Source<AntigravityQuota>),
     radars: [RadarObserver; 2],
     agy: Option<PathBuf>,
+    agy_observer: antigravity::Observer,
     antigravity_due: i64,
     codex_due: i64,
     report: Report,
@@ -150,14 +193,7 @@ impl Observers {
         if let Ok(Some(value)) = read_optional(&dir.join("codex-quota.json")) {
             codex.restore_cache(value);
         }
-        let agy: Option<AntigravityQuota> = read_optional(&dir.join("antigravity-quota.json"))
-            .ok()
-            .flatten();
-        let agy = agy.filter(|q| {
-            [&q.gemini, &q.claude_gpt]
-                .into_iter()
-                .all(|w| w.remaining_percent <= 100 && w.resets_at.is_none_or(|t| t > 0))
-        });
+        let agy = load_antigravity_cache(dir);
         Self {
             dir: dir.into(),
             codex,
@@ -168,6 +204,7 @@ impl Observers {
             ),
             radars,
             agy: None,
+            agy_observer: Default::default(),
             antigravity_due: i64::MIN,
             codex_due: i64::MIN,
             report: Report::default(),
@@ -180,9 +217,7 @@ impl Observers {
             std::env::var_os("AI_QUOTA_STATUSLINE_PATH").map(PathBuf::from),
             radar_pair(dir),
         );
-        observers.agy = std::env::var_os("AI_QUOTA_AGY_BIN")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/bin/agy")));
+        observers.agy = antigravity::cli_path();
         observers
     }
 
@@ -224,33 +259,34 @@ impl Observers {
                 self.quotas.0 = quota;
             }
             if now >= self.antigravity_due {
-                self.antigravity_due = now.saturating_add(600);
-                let live = self
-                    .agy
-                    .as_deref()
-                    .filter(|_| self.snapshot.is_none())
-                    .and_then(antigravity::cli_quota);
-                let (agy, reason) = if let Some(q) = live {
-                    (Source::Current(q), None)
-                } else {
-                    antigravity::observe(self.snapshot.as_deref(), self.quotas.1.value())
-                };
-                let why = reason.map(|s| match s {
-                    antigravity::SnapshotFailure::Expired => Reason::SnapshotExpired,
-                    antigravity::SnapshotFailure::MissingOrInvalid => {
-                        if self.agy.is_some() && self.snapshot.is_none() {
-                            Reason::CliUsageUnavailable
-                        } else {
-                            Reason::SnapshotMissingOrInvalid
-                        }
+                let started = std::time::Instant::now();
+                let (agy, [g, c], delay) = self.agy_observer.poll(
+                    self.snapshot.as_deref(),
+                    self.agy.as_deref(),
+                    self.quotas.1.value(),
+                    now,
+                );
+                self.antigravity_due = now
+                    .saturating_add(started.elapsed().as_secs() as i64)
+                    .saturating_add(delay);
+                let val = agy.value();
+                self.report.gemini = GroupDiagnostic::new(val.and_then(|q| q.gemini.as_ref()), g);
+                self.report.claude_gpt =
+                    GroupDiagnostic::new(val.and_then(|q| q.claude_gpt.as_ref()), c);
+                let mut summary = Entry::observed(&agy, None);
+                if g.is_some() || c.is_some() {
+                    if val.is_some() {
+                        summary.status = Status::Stale;
                     }
-                });
-                self.report.antigravity_quota = Entry::observed(&agy, why);
+                    summary.reason = Some(if self.agy.is_some() {
+                        Reason::CliUsageUnavailable
+                    } else {
+                        Reason::SnapshotMissingOrInvalid
+                    });
+                }
+                self.report.antigravity_quota = summary;
                 if persist
-                    && !matches!(
-                        why,
-                        Some(Reason::SnapshotMissingOrInvalid | Reason::CliUsageUnavailable)
-                    )
+                    && self.quotas.1.value() != val
                     && let Some(q) = agy.value()
                     && save(
                         &self.dir.join("antigravity-quota.json"),
@@ -326,7 +362,9 @@ fn display_deadline(d: &Dashboard) -> i64 {
         d.antigravity
             .value()
             .into_iter()
-            .flat_map(|q| [&q.gemini, &q.claude_gpt]),
+            .flat_map(|q| [&q.gemini, &q.claude_gpt])
+            .flatten()
+            .map(|r| &r.window),
     ) {
         let Some(at) = w.resets_at else { continue };
         let remaining = at.saturating_sub(now);

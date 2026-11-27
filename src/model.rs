@@ -38,8 +38,18 @@ pub struct CodexQuota {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AntigravityQuota {
-    pub gemini: QuotaWindow,
-    pub claude_gpt: QuotaWindow,
+    pub gemini: Option<GroupReading>,
+    pub claude_gpt: Option<GroupReading>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupReading {
+    #[serde(flatten)]
+    pub window: QuotaWindow,
+    #[serde(default)]
+    pub stale: bool,
+    #[serde(default)]
+    pub last_success: Option<i64>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuotaWindow {
