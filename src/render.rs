@@ -27,7 +27,8 @@ impl Frame {
     }
 }
 
-use crate::model::{AntigravityQuota, CodexQuota, Radar, ResetKind, Scope, Source, WindowKind};
+use crate::model::{CodexQuota, Radar, ResetKind, Scope, Source, WindowKind};
+use crate::radar::Provider;
 use chrono::{Datelike, TimeZone};
 use embedded_graphics::{
     draw_target::DrawTargetExt,
@@ -50,6 +51,8 @@ const INK: BinaryColor = BinaryColor::On;
 const PAPER: BinaryColor = BinaryColor::Off;
 const BODY: FontRenderer = FontRenderer::new::<u8g2_font_wqy13_t_gb2312>();
 const LABEL: FontRenderer = FontRenderer::new::<u8g2_font_wqy14_t_gb2312>();
+const COMPACT: FontRenderer = FontRenderer::new::<u8g2_font_wqy12_t_gb2312>();
+const THREE_DIGITS: FontRenderer = FontRenderer::new::<u8g2_font_logisoso34_tn>();
 const HERO: FontRenderer = FontRenderer::new::<u8g2_font_logisoso42_tn>();
 const NUMBER: FontRenderer = FontRenderer::new::<u8g2_font_logisoso26_tf>();
 
@@ -137,20 +140,122 @@ impl Frame {
         self.visible_text.push(visible);
         Ok(())
     }
-    fn dial(&mut self, source: &Source<CodexQuota>, now: i64) -> Result<(), String> {
-        self.rect(0, 0, 214, 246, INK);
-        self.label(&LABEL, "CODEX", 14..94, 20, Left, PAPER)?;
-        if source.is_stale() {
-            self.label(&BODY, "[旧]", 64..110, 20, Left, PAPER)?;
+    fn chamfer(&mut self, x: Range<i32>, y: Range<i32>, cut: i32, color: BinaryColor) {
+        for row in y.clone() {
+            let left = x.start + (cut - (row - y.start)).max(0);
+            let right = x.end - (cut - (y.end - 1 - row)).max(0);
+            self.rect(left, row, (right - left) as u32, 1, color);
         }
-        self.label(&BODY, "WEEKLY", 130..201, 20, Right, PAPER)?;
-        let center = Point::new(107, 128);
-        Arc::with_center(center, 137, 135.0.deg(), 270.0.deg())
-            .into_styled(PrimitiveStyle::with_stroke(PAPER, 2))
+    }
+
+    fn armor(&mut self, x: Range<i32>, y: Range<i32>, cut: i32, border: i32) {
+        for (i, row) in (y.start + 6..y.end + 6).step_by(3).enumerate() {
+            let offset = (i % 2) as i32;
+            for col in (x.start + 6 + offset..x.end + 6).step_by(3) {
+                if col - x.start - 6 + row - y.start - 6 >= cut
+                    && x.end + 5 - col + y.end + 5 - row >= cut
+                {
+                    self.rect(col, row, 1, 1, INK);
+                }
+            }
+        }
+        self.chamfer(x.clone(), y.clone(), cut, INK);
+        self.chamfer(
+            x.start + border..x.end - border,
+            y.start + border..y.end - border,
+            cut - border / 2,
+            PAPER,
+        );
+    }
+
+    fn cells(&mut self, x: Range<i32>, y: Range<i32>, percent: u8) {
+        let span = x.end - x.start - 5;
+        let height = y.end - y.start;
+        for cell in 0..10 {
+            let left = x.start + cell * (span + 3) / 10;
+            let right = x.start + (cell + 1) * (span + 3) / 10 - 3;
+            for row in 0..height {
+                let slant = 5 * (height - 1 - row) / (height - 1);
+                if cell < i32::from(percent.div_ceil(10)) || row == 0 || row == height - 1 {
+                    self.rect(left + slant, y.start + row, (right - left) as u32, 1, INK);
+                } else {
+                    self.rect(left + slant, y.start + row, 1, 1, INK);
+                    self.rect(right - 1 + slant, y.start + row, 1, 1, INK);
+                }
+            }
+        }
+    }
+
+    fn badge(
+        &mut self,
+        font: &FontRenderer,
+        x: Range<i32>,
+        y: i32,
+        label: &str,
+    ) -> Result<(), String> {
+        self.chamfer(x.clone(), y..y + 17, 2, INK);
+        self.chamfer(x.start + 1..x.end - 1, y + 1..y + 16, 2, PAPER);
+        self.label(font, label, x.start + 2..x.end - 2, y + 13, Center, INK)
+    }
+
+    fn dial_header(&mut self, source: &Source<CodexQuota>) -> Result<(), String> {
+        let mut badge_left = 145;
+        if let Some(quota) = source.value() {
+            if quota.weekly.remaining_percent <= 25 {
+                self.chamfer(145..190, 39..56, 3, INK);
+                self.label(
+                    &FontRenderer::new::<u8g2_font_6x13B_tf>(),
+                    "[!LOW]",
+                    147..188,
+                    52,
+                    Center,
+                    PAPER,
+                )?;
+            } else if let Some(n) = quota.reset_credits.filter(|n| *n > 0) {
+                let label = format!("CR×{n}");
+                let font = if n >= 100_000 {
+                    &FontRenderer::new::<u8g2_font_5x8_tf>()
+                } else {
+                    &BODY
+                };
+                let width = font
+                    .get_rendered_dimensions(
+                        label.as_str(),
+                        Point::zero(),
+                        VerticalPosition::Baseline,
+                    )
+                    .map_err(|e| format!("credit measurement: {e:?}"))?
+                    .advance
+                    .x;
+                badge_left = 190 - (width + 4).max(45);
+                self.badge(font, badge_left..190, 39, &label)?;
+            }
+        }
+        if source.is_stale() {
+            let right = badge_left - 1;
+            badge_left = right - 19;
+            self.badge(&BODY, badge_left..right, 39, "旧")?;
+        }
+        let tag_end = 122.min(badge_left - 3);
+        self.chamfer(18..tag_end, 39..56, 5, INK);
+        let font = if tag_end < 110 {
+            &FontRenderer::new::<u8g2_font_6x13B_tf>()
+        } else {
+            &LABEL
+        };
+        self.label(font, "CODEX // WK", 22..tag_end - 4, 52, Center, PAPER)
+    }
+
+    fn dial(&mut self, source: &Source<CodexQuota>, now: i64) -> Result<(), String> {
+        self.armor(10..198, 32..230, 14, 3);
+        self.dial_header(source)?;
+        let center = Point::new(104, 124);
+        Arc::with_center(center, 101, 135.0.deg(), 270.0.deg())
+            .into_styled(PrimitiveStyle::with_stroke(INK, 2))
             .draw(self)
             .unwrap();
-        for i in 0..=20 {
-            let angle = (135.0 + 13.5 * i as f64).to_radians();
+        for i in 0..20 {
+            let angle = (135.0 + 270.0 * i as f64 / 19.0).to_radians();
             let point = |r: f64| {
                 center
                     + Point::new(
@@ -159,11 +264,8 @@ impl Frame {
                     )
             };
             let major = i % 5 == 0;
-            Line::new(point(75.), point(if major { 83. } else { 79. }))
-                .into_styled(PrimitiveStyle::with_stroke(
-                    PAPER,
-                    if major { 2 } else { 1 },
-                ))
+            Line::new(point(54.), point(if major { 61. } else { 57. }))
+                .into_styled(PrimitiveStyle::with_stroke(INK, if major { 2 } else { 1 }))
                 .draw(self)
                 .unwrap();
         }
@@ -175,49 +277,42 @@ impl Frame {
             if w.remaining_percent > 0 {
                 Arc::with_center(
                     center,
-                    125,
+                    89,
                     135.0.deg(),
                     (2.7 * w.remaining_percent as f32).deg(),
                 )
-                .into_styled(PrimitiveStyle::with_stroke(PAPER, 14))
+                .into_styled(PrimitiveStyle::with_stroke(INK, 11))
                 .draw(self)
                 .unwrap();
             }
             self.label(
-                &HERO,
+                if w.remaining_percent == 100 {
+                    &THREE_DIGITS
+                } else {
+                    &HERO
+                },
                 &w.remaining_percent.to_string(),
-                56..158,
-                140,
+                64..145,
+                136,
                 Center,
-                PAPER,
+                INK,
             )?;
-            self.label(&BODY, "% 剩余", 67..147, 160, Center, PAPER)?;
-            if let Some(n) = quota.reset_credits.filter(|n| *n > 0) {
-                let width = if n > 999 { 154 } else { 90 };
-                self.rect(107 - width / 2, 199, width as u32, 17, PAPER);
-                self.label(
-                    &BODY,
-                    &format!("重置额度 ×{n}"),
-                    107 - width / 2..107 + width / 2,
-                    212,
-                    Center,
-                    INK,
-                )?;
-            }
+            self.label(&BODY, "%", 87..121, 152, Center, INK)?;
+            self.cells(20..188, 190..203, w.remaining_percent);
             self.label(
                 &LABEL,
                 &format!(
-                    "重置 {}",
-                    countdown(now, w.resets_at.ok_or("missing Codex reset")?, false)
+                    "RST // {}",
+                    countdown(now, w.resets_at.ok_or("missing Codex reset")?)
                 ),
-                8..206,
-                229,
+                18..190,
+                220,
                 Center,
-                PAPER,
+                INK,
             )?;
         } else {
-            self.label(&LABEL, "暂不可用", 50..164, 131, Center, PAPER)?;
-            self.label(&BODY, "等待 Codex", 54..160, 153, Center, PAPER)?;
+            self.label(&LABEL, "暂不可用", 67..141, 124, Center, INK)?;
+            self.label(&BODY, "等待 Codex", 64..144, 145, Center, INK)?;
         }
         Ok(())
     }
@@ -225,116 +320,94 @@ impl Frame {
         &mut self,
         y: i32,
         name: &str,
-        reading: Option<&crate::model::GroupReading>,
+        reading: Option<&crate::model::WindowReading>,
         now: i64,
     ) -> Result<(), String> {
-        self.rect(226, y, 162, 82, INK);
-        self.rect(228, y + 18, 158, 62, PAPER);
-        let name_end = if reading.is_some_and(|r| r.stale) {
-            307
-        } else {
-            330
-        };
-        self.label(&LABEL, name, 233..name_end, y + 14, Left, PAPER)?;
+        self.armor(210..384, y..y + 94, 10, 2);
+        self.chamfer(216..310, y + 6..y + 22, 4, INK);
+        self.label(&BODY, name, 222..306, y + 19, Left, PAPER)?;
         let Some(reading) = reading else {
-            self.label(&BODY, "暂不可用", 234..380, y + 51, Center, INK)?;
-            return Ok(());
+            return self.label(&LABEL, "暂不可用", 218..376, y + 57, Center, INK);
         };
         if reading.stale {
-            self.label(&BODY, "旧", 308..329, y + 14, Right, PAPER)?;
+            self.badge(&BODY, 344..376, y + 6, "旧")?;
         }
         let w = &reading.window;
         if w.remaining_percent > 100 {
             return Err("invalid Antigravity percentage".into());
         }
-        let tag = match w.kind {
-            WindowKind::Weekly => "周窗口",
-            WindowKind::FiveHour => "5h窗口",
-            WindowKind::Tied => "双窗口",
-            WindowKind::Unspecified => "窗口",
-        };
-        self.label(&BODY, tag, 330..382, y + 14, Right, PAPER)?;
         self.label(
             &NUMBER,
             &format!("{}%", w.remaining_percent),
-            234..319,
+            218..301,
             y + 56,
             Left,
             INK,
         )?;
-        self.label(&BODY, "重置", 318..380, y + 35, Right, INK)?;
         self.label(
             &BODY,
             &w.resets_at
-                .map(|t| countdown(now, t, true))
+                .map(|t| countdown(now, t))
                 .unwrap_or_else(|| "--".into()),
-            313..380,
-            y + 55,
+            302..377,
+            y + 56,
             Right,
             INK,
         )?;
-        self.rect(234, y + 65, 146, 8, INK);
-        self.rect(235, y + 66, 144, 6, PAPER);
-        self.rect(
-            235,
-            y + 66,
-            144 * u32::from(w.remaining_percent) / 100,
-            6,
-            INK,
-        );
+        self.cells(218..376, y + 66..y + 82, w.remaining_percent);
         Ok(())
     }
-    fn telemetry(
-        &mut self,
-        dashboard: &Dashboard,
-        source: &Source<AntigravityQuota>,
-    ) -> Result<(), String> {
+    fn telemetry(&mut self, dashboard: &Dashboard) -> Result<(), String> {
         let now = dashboard.now;
         let weekday = ["一", "二", "三", "四", "五", "六", "日"]
             [now.weekday().num_days_from_monday() as usize];
-        self.label(
-            &LABEL,
-            &format!("{} 周{weekday}", now.format("%m/%d")),
-            226..333,
-            20,
-            Left,
-            INK,
-        )?;
         let clock = dashboard
             .screen_updated_at
             .map(|t| t.with_timezone(now.offset()).format("%H:%M").to_string())
             .unwrap_or_else(|| "--:--".into());
-        self.label(&LABEL, &clock, 340..389, 20, Right, INK)?;
-        self.rect(226, 28, 162, 1, INK);
-        self.label(&LABEL, "ANTIGRAVITY", 226..345, 47, Left, INK)?;
-        if source.is_stale() {
-            self.rect(321, 33, 20, 17, INK);
-            self.rect(322, 34, 18, 15, PAPER);
-            self.label(&BODY, "旧", 322..340, 46, Center, INK)?;
-        }
-        if let Some(q) = source.value() {
-            self.card(58, "GEMINI", q.gemini.as_ref(), now.timestamp())?;
-            self.card(150, "CLAUDE/GPT", q.claude_gpt.as_ref(), now.timestamp())?;
-        } else {
-            for y in (56..234).step_by(5) {
-                for x in (226..388).step_by(5) {
-                    self.rect(x, y, 1, 1, INK);
-                }
-            }
-            self.rect(246, 119, 122, 52, INK);
-            self.rect(248, 121, 118, 48, PAPER);
-            self.label(&LABEL, "额度不可用", 250..364, 141, Center, INK)?;
-            self.label(&BODY, "等待读取额度", 250..364, 160, Center, INK)?;
-        }
+        self.rect(0, 0, 400, 24, INK);
+        self.label(
+            &BODY,
+            "AI-QUOTA // 01-CODEX 02-GEMINI",
+            10..241,
+            16,
+            Left,
+            PAPER,
+        )?;
+        self.label(
+            &BODY,
+            &format!("{} 周{weekday} {clock}", now.format("%m/%d")),
+            241..391,
+            16,
+            Right,
+            PAPER,
+        )?;
+        let quota = dashboard.antigravity.value();
+        self.card(
+            32,
+            "GEMINI · 5H",
+            quota.and_then(|q| q.five_hour.as_ref()),
+            now.timestamp(),
+        )?;
+        self.card(
+            136,
+            "GEMINI · WK",
+            quota.and_then(|q| q.weekly.as_ref()),
+            now.timestamp(),
+        )?;
         Ok(())
     }
     fn radar(
         &mut self,
         x: i32,
-        provider: &str,
+        provider: Provider,
         source: &Source<Radar>,
         d: &Dashboard,
     ) -> Result<(), String> {
+        let name = match provider {
+            Provider::Codex => "CODEX",
+            Provider::Antigravity => "GEMINI",
+        };
         let state = source.value();
         let active = matches!(
             state,
@@ -359,10 +432,10 @@ impl Frame {
                     time.format("%m/%d ").to_string()
                 };
                 (
-                    format!("{provider} · 重置排期"),
+                    format!("{name} // 重置排期"),
                     format!(
                         "{}{date}{}{}",
-                        if provider == "AGY" {
+                        if provider == Provider::Antigravity {
                             format!("{} ", scope.label())
                         } else {
                             String::new()
@@ -382,10 +455,10 @@ impl Frame {
                     ResetKind::Banked => "重置额度已发",
                 };
                 (
-                    format!("{provider} · {status}"),
+                    format!("{name} // {status}"),
                     format!(
                         "{} · {}",
-                        if provider == "AGY" {
+                        if provider == Provider::Antigravity {
                             scope.label()
                         } else {
                             match kind {
@@ -397,22 +470,38 @@ impl Frame {
                     ),
                 )
             }
-            Some(Radar::NoSchedule) => (format!("{provider} RADAR"), "暂无排期".into()),
-            None => (format!("{provider} RADAR"), "信号丢失".into()),
+            Some(Radar::NoSchedule) => (format!("{name} RADAR"), "暂无排期".into()),
+            None => (format!("{name} RADAR"), "信号丢失".into()),
         };
-        self.rect(x, 252, 188, 42, INK);
-        if !active {
-            self.rect(x + 1, 253, 186, 40, PAPER);
-        }
-        let color = if active { PAPER } else { INK };
-        let end = if source.is_stale() {
-            self.label(&BODY, "(旧)", x + 151..x + 184, 268, Right, color)?;
-            x + 149
+        let title = if source.is_stale() {
+            format!("{title}(旧)")
         } else {
-            x + 181
+            title
         };
-        self.label(&LABEL, &title, x + 7..end, 269, Left, color)?;
-        self.label(&BODY, &detail, x + 7..x + 181, 287, Left, color)
+        let color = if active {
+            for row in 0..46 {
+                for col in 0..186 {
+                    if (col + row) % 6 < 2 {
+                        self.rect(x + col, 246 + row, 1, 1, INK);
+                    }
+                }
+            }
+            self.rect(x + 12, 250, 162, 38, INK);
+            PAPER
+        } else {
+            self.chamfer(x..x + 186, 246..292, 6, INK);
+            self.chamfer(x + 2..x + 184, 248..290, 5, PAPER);
+            INK
+        };
+        self.label(
+            if source.is_stale() { &COMPACT } else { &BODY },
+            &title,
+            x + 13..x + 173,
+            265,
+            Left,
+            color,
+        )?;
+        self.label(&BODY, &detail, x + 16..x + 171, 282, Left, color)
     }
 }
 
@@ -437,28 +526,24 @@ fn elapsed_label(from: i64, to: i64) -> String {
         "刚刚".into()
     }
 }
-fn countdown(from: i64, to: i64, compact: bool) -> String {
+fn countdown(from: i64, to: i64) -> String {
     let minutes = to.saturating_sub(from).max(0) / 60;
     let days = minutes / 1440;
     let hours = (minutes / 60) % 24;
     if days > 0 {
-        format!("{days}天{hours}{}", if compact { "h" } else { "小时" })
+        format!("{days}天{hours}h")
     } else if hours > 0 {
         let mins = ((minutes % 60) / 15) * 15;
         if mins == 0 {
-            format!("{hours}{}", if compact { "h" } else { "小时" })
+            format!("{hours}h")
         } else {
-            format!(
-                "{hours}{}{mins}{}",
-                if compact { "h" } else { "小时" },
-                if compact { "m" } else { "分" }
-            )
+            format!("{hours}h{mins}m")
         }
     } else if minutes >= 15 {
         let mins = (minutes / 5) * 5;
-        format!("{mins}{}", if compact { "m" } else { "分" })
+        format!("{mins}m")
     } else {
-        format!("{minutes}{}", if compact { "m" } else { "分" })
+        format!("{minutes}m")
     }
 }
 pub fn render(dashboard: &Dashboard) -> Result<Frame, String> {
@@ -467,9 +552,13 @@ pub fn render(dashboard: &Dashboard) -> Result<Frame, String> {
         visible_text: Vec::new(),
     };
     frame.dial(&dashboard.codex, dashboard.now.timestamp())?;
-    frame.telemetry(dashboard, &dashboard.antigravity)?;
-    frame.rect(0, 246, 400, 2, INK);
-    frame.radar(8, "CODEX", &dashboard.codex_radar, dashboard)?;
-    frame.radar(204, "AGY", &dashboard.antigravity_radar, dashboard)?;
+    frame.telemetry(dashboard)?;
+    frame.radar(10, Provider::Codex, &dashboard.codex_radar, dashboard)?;
+    frame.radar(
+        204,
+        Provider::Antigravity,
+        &dashboard.antigravity_radar,
+        dashboard,
+    )?;
     Ok(frame)
 }

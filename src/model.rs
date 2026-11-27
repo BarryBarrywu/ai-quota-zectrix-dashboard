@@ -38,12 +38,12 @@ pub struct CodexQuota {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AntigravityQuota {
-    pub gemini: Option<GroupReading>,
-    pub claude_gpt: Option<GroupReading>,
+    pub five_hour: Option<WindowReading>,
+    pub weekly: Option<WindowReading>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GroupReading {
+pub struct WindowReading {
     #[serde(flatten)]
     pub window: QuotaWindow,
     #[serde(default)]

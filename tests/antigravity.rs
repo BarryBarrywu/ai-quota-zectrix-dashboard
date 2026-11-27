@@ -6,22 +6,16 @@ use std::fs;
 use std::time::UNIX_EPOCH;
 
 #[test]
-fn statusline_uses_constrained_window_and_capture_time() {
+fn statusline_exposes_both_gemini_windows_and_capture_time() {
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let path = tmp.path();
     fs::write(path, include_bytes!("data/agy-statusline.json")).unwrap();
     let Source::Current(quota) = observe_snapshot(path, None) else {
         panic!("missing groups")
     };
-    assert_eq!(
-        quota.gemini.as_ref().unwrap().window.kind,
-        WindowKind::FiveHour
-    );
-    assert_eq!(quota.gemini.as_ref().unwrap().window.remaining_percent, 33);
-    assert_eq!(
-        quota.claude_gpt.as_ref().unwrap().window.remaining_percent,
-        46
-    );
+    let windows = serde_json::to_value(&quota).unwrap();
+    assert_eq!(windows["five_hour"]["remaining_percent"], 33);
+    assert_eq!(windows["weekly"]["remaining_percent"], 67);
     let mtime = fs::metadata(path)
         .unwrap()
         .modified()
@@ -29,7 +23,7 @@ fn statusline_uses_constrained_window_and_capture_time() {
         .duration_since(UNIX_EPOCH)
         .unwrap();
     assert_eq!(
-        quota.claude_gpt.as_ref().unwrap().window.resets_at,
+        quota.weekly.as_ref().unwrap().window.resets_at,
         Some(mtime.as_secs() as i64 + 7200)
     );
 }
@@ -45,7 +39,7 @@ fn stale_snapshot_keeps_its_capture_time_and_invalid_data_uses_previous() {
         panic!("expected stale snapshot")
     };
     assert_eq!(
-        previous.claude_gpt.as_ref().unwrap().window.resets_at,
+        previous.weekly.as_ref().unwrap().window.resets_at,
         Some(1_700_007_200)
     );
     fs::write(
@@ -61,7 +55,7 @@ fn stale_snapshot_keeps_its_capture_time_and_invalid_data_uses_previous() {
 }
 
 #[test]
-fn cli_usage_report_handles_absent_reset_and_tied_full_windows() {
+fn cli_usage_report_ignores_third_party_buckets() {
     let tmp = tempfile::NamedTempFile::new().unwrap();
     fs::write(tmp.path(), r#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[
       {"buckets":[{"id":"gemini-weekly","window":"weekly","remaining_fraction":1,"reset_time":"2026-12-03T14:10:00Z"}]},
@@ -71,9 +65,8 @@ fn cli_usage_report_handles_absent_reset_and_tied_full_windows() {
     let Source::Current(q) = observe_snapshot(tmp.path(), None) else {
         panic!("missing CLI usage")
     };
-    assert_eq!(q.gemini.as_ref().unwrap().window.kind, WindowKind::Weekly);
-    assert_eq!(q.claude_gpt.as_ref().unwrap().window.kind, WindowKind::Tied);
-    assert_eq!(q.claude_gpt.as_ref().unwrap().window.resets_at, None);
+    assert_eq!(q.weekly.as_ref().unwrap().window.kind, WindowKind::Weekly);
+    assert!(q.five_hour.is_none());
 }
 
 #[test]
@@ -84,7 +77,7 @@ fn live_cli_reads_a_structured_usage_command() {
     fs::write(&program, r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo 1.5.18; exit; fi
 [ "$*" = "-p /usage --output-format json --print-timeout 20s" ] || exit 1
-echo '{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"buckets":[{"id":"gemini-weekly","window":"weekly","remaining_fraction":0.76},{"id":"3p-weekly","window":"weekly","remaining_fraction":1}]}]}}}'
+echo '{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"buckets":[{"id":"gemini-weekly","window":"weekly","remaining_fraction":0.76},{"id":"gemini-5h","window":"5h","remaining_fraction":0.23},{"id":"3p-weekly","window":"weekly","remaining_fraction":1}]}]}}}'
 "#).unwrap();
     fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
     let (report, reasons, _) = ai_quota_zectrix_dashboard::antigravity::Observer::default().poll(
@@ -98,10 +91,10 @@ echo '{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"buckets"
         .unwrap_or_else(|| panic!("CLI failed: {reasons:?}"));
     assert_eq!(
         (
-            quota.gemini.as_ref().unwrap().window.remaining_percent,
-            quota.claude_gpt.as_ref().unwrap().window.remaining_percent
+            quota.weekly.as_ref().unwrap().window.remaining_percent,
+            quota.five_hour.as_ref().unwrap().window.remaining_percent
         ),
-        (76, 100)
+        (76, 23)
     );
 }
 
@@ -135,7 +128,7 @@ cat report
 }
 
 #[test]
-fn snapshot_and_cli_fill_groups_independently_and_keep_the_original_observation_times() {
+fn snapshot_and_cli_fill_windows_independently_and_keep_the_original_observation_times() {
     use ai_quota_zectrix_dashboard::antigravity::{Failure, Observer};
     use serde_json::json;
     let f = Script::new();
@@ -150,23 +143,23 @@ fn snapshot_and_cli_fill_groups_independently_and_keep_the_original_observation_
         r#"{"quota":{"gemini-weekly":{"remaining_fraction":0.91}}}"#,
     )
     .unwrap();
-    f.report(json!([{"id":"3p-weekly","window":"weekly","remaining_fraction":0.77}]));
+    f.report(json!([{"id":"gemini-5h","window":"5h","remaining_fraction":0.77}]));
     let (both, errors, _) = observer.poll(Some(&p), Some(&f.bin), full.value(), 2000);
     assert_eq!(errors, [None, None]);
     let q = both.value().unwrap();
-    assert_eq!(q.gemini.as_ref().unwrap().window.remaining_percent, 91);
-    assert_eq!(q.claude_gpt.as_ref().unwrap().last_success, Some(2000));
+    assert_eq!(q.weekly.as_ref().unwrap().window.remaining_percent, 91);
+    assert_eq!(q.five_hour.as_ref().unwrap().last_success, Some(2000));
     fs::File::open(&p)
         .unwrap()
         .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(20))
         .unwrap();
     f.report(json!([{"id":"gemini-weekly","window":"weekly","remaining_fraction":0.85}]));
     let (mixed, errors, delay) = observer.poll(Some(&p), Some(&f.bin), Some(q), 3000);
-    assert_eq!(errors, [None, Some(Failure::MissingGroup)]);
+    assert_eq!(errors, [Some(Failure::MissingWindow), None]);
     assert_eq!(delay, 15);
     let m = mixed.value().unwrap();
-    let g = m.gemini.as_ref().unwrap();
-    let c = m.claude_gpt.as_ref().unwrap();
+    let g = m.weekly.as_ref().unwrap();
+    let c = m.five_hour.as_ref().unwrap();
     assert!(!g.stale);
     assert_eq!(g.window.remaining_percent, 85);
     assert!(c.stale);
@@ -175,7 +168,7 @@ fn snapshot_and_cli_fill_groups_independently_and_keep_the_original_observation_
         (77, Some(2000))
     );
     let snapshotless = observer.poll(None, Some(&f.bin), None, 3015).0;
-    assert!(snapshotless.value().unwrap().claude_gpt.is_none());
+    assert!(snapshotless.value().unwrap().five_hour.is_none());
     let mut d: ai_quota_zectrix_dashboard::model::Dashboard =
         serde_json::from_str(include_str!("../fixtures/normal.json")).unwrap();
     d.antigravity = mixed;
@@ -254,7 +247,7 @@ fn cli_accepts_prefixed_and_prerelease_semver_strings() {
     let f = Script::new();
     f.report(json!([
         {"id":"gemini-weekly","window":"weekly","remaining_fraction":0.80},
-        {"id":"3p-5h","window":"5h","remaining_fraction":0.60}
+        {"id":"gemini-5h","window":"5h","remaining_fraction":0.60}
     ]));
     fs::write(f.dir.path().join("version"), "agy v1.6.0-beta.2+abc123\n").unwrap();
     let mut observer = Observer::default();
@@ -262,6 +255,44 @@ fn cli_accepts_prefixed_and_prerelease_semver_strings() {
     assert_eq!(errors, [None, None]);
     assert_eq!(delay, 600);
     let q = source.value().unwrap();
-    assert_eq!(q.gemini.as_ref().unwrap().window.remaining_percent, 80);
-    assert_eq!(q.claude_gpt.as_ref().unwrap().window.remaining_percent, 60);
+    assert_eq!(q.weekly.as_ref().unwrap().window.remaining_percent, 80);
+    assert_eq!(q.five_hour.as_ref().unwrap().window.remaining_percent, 60);
+}
+
+#[test]
+fn partial_statusline_without_cli_retries_until_both_windows_recover() {
+    use ai_quota_zectrix_dashboard::antigravity::{Failure, Observer};
+    let file = tempfile::NamedTempFile::new().unwrap();
+    fs::write(
+        file.path(),
+        r#"{"quota":{"gemini-5h":{"remaining_fraction":0},"3p-weekly":{"remaining_fraction":1}}}"#,
+    )
+    .unwrap();
+    let mut observer = Observer::default();
+    for expected in [15, 60, 300, 300] {
+        let (quota, errors, delay) = observer.poll(Some(file.path()), None, None, 1000);
+        let q = quota.value().unwrap();
+        assert_eq!(q.five_hour.as_ref().unwrap().window.remaining_percent, 0);
+        assert!(q.weekly.is_none());
+        assert_eq!(errors, [None, Some(Failure::MissingWindow)]);
+        assert_eq!(delay, expected);
+    }
+    fs::write(file.path(), include_bytes!("data/agy-statusline.json")).unwrap();
+    assert_eq!(observer.poll(Some(file.path()), None, None, 2000).2, 600);
+}
+
+#[test]
+fn cli_with_no_gemini_windows_is_missing_quota_with_or_without_third_party() {
+    use ai_quota_zectrix_dashboard::antigravity::{Failure, Observer};
+    use serde_json::json;
+    let cli = Script::new();
+    for buckets in [
+        json!([]),
+        json!([{"id":"3p-gemini-weekly","remaining_fraction":1}]),
+    ] {
+        cli.report(buckets);
+        let (quota, errors, _) = Observer::default().poll(None, Some(&cli.bin), None, 1000);
+        assert_eq!(quota, Source::Unavailable);
+        assert_eq!(errors, [Some(Failure::MissingWindow); 2]);
+    }
 }

@@ -1,7 +1,7 @@
 use crate::{
     antigravity,
     codex::{CodexFailure, CodexObserver},
-    model::{AntigravityQuota, CodexQuota, Dashboard, Radar, Source},
+    model::{AntigravityQuota, CodexQuota, Dashboard, Radar, Source, WindowKind},
     publisher::{
         CLOUD_BASE, Cloud, PublishOutcome, Result, Settings, last_success, publish_changed,
         read_optional, save,
@@ -78,14 +78,14 @@ impl Entry {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-struct GroupDiagnostic {
+struct WindowDiagnostic {
     status: Status,
     last_success: Option<i64>,
     reason: Option<antigravity::Failure>,
 }
-impl GroupDiagnostic {
+impl WindowDiagnostic {
     fn new(
-        reading: Option<&crate::model::GroupReading>,
+        reading: Option<&crate::model::WindowReading>,
         reason: Option<antigravity::Failure>,
     ) -> Self {
         Self {
@@ -105,9 +105,9 @@ struct Report {
     codex_quota: Entry,
     antigravity_quota: Entry,
     #[serde(default)]
-    gemini: GroupDiagnostic,
+    gemini_five_hour: WindowDiagnostic,
     #[serde(default)]
-    claude_gpt: GroupDiagnostic,
+    gemini_weekly: WindowDiagnostic,
     codex_radar: Entry,
     antigravity_radar: Entry,
     publisher: Entry,
@@ -141,9 +141,10 @@ pub fn diagnostics(dir: &Path) -> Result<String> {
         );
         let cached = load_antigravity_cache(dir);
         report.antigravity_quota = stopped(cached.is_some());
-        report.gemini = GroupDiagnostic::new(cached.as_ref().and_then(|q| q.gemini.as_ref()), None);
-        report.claude_gpt =
-            GroupDiagnostic::new(cached.as_ref().and_then(|q| q.claude_gpt.as_ref()), None);
+        report.gemini_five_hour =
+            WindowDiagnostic::new(cached.as_ref().and_then(|q| q.five_hour.as_ref()), None);
+        report.gemini_weekly =
+            WindowDiagnostic::new(cached.as_ref().and_then(|q| q.weekly.as_ref()), None);
         let [codex, agy] = radar_pair(dir);
         let now = Local::now().timestamp();
         report.codex_radar = stopped(codex.view(now).value().is_some());
@@ -156,17 +157,21 @@ pub fn diagnostics(dir: &Path) -> Result<String> {
 fn load_antigravity_cache(dir: &Path) -> Option<AntigravityQuota> {
     let path = dir.join("antigravity-quota.json");
     let mut q = read_optional::<AntigravityQuota>(&path).ok()??;
-    for group in [&mut q.gemini, &mut q.claude_gpt] {
-        if let Some(r) = group
+    for (window, kind) in [
+        (&mut q.five_hour, WindowKind::FiveHour),
+        (&mut q.weekly, WindowKind::Weekly),
+    ] {
+        if let Some(r) = window
+            && r.window.kind == kind
             && r.window.remaining_percent <= 100
             && r.window.resets_at.is_none_or(|t| t > 0)
         {
             r.stale = true;
         } else {
-            *group = None;
+            *window = None;
         }
     }
-    (q.gemini.is_some() || q.claude_gpt.is_some()).then_some(q)
+    (q.five_hour.is_some() || q.weekly.is_some()).then_some(q)
 }
 
 pub struct Observers {
@@ -284,14 +289,15 @@ impl Observers {
             }
             self.quotas.0 = quota;
         }
-        if let Some(((agy, [g, c], delay), elapsed)) = agy_res {
+        if let Some(((agy, [five_hour_error, weekly_error], delay), elapsed)) = agy_res {
             self.antigravity_due = now.saturating_add(elapsed).saturating_add(delay);
             let val = agy.value();
-            self.report.gemini = GroupDiagnostic::new(val.and_then(|q| q.gemini.as_ref()), g);
-            self.report.claude_gpt =
-                GroupDiagnostic::new(val.and_then(|q| q.claude_gpt.as_ref()), c);
+            self.report.gemini_five_hour =
+                WindowDiagnostic::new(val.and_then(|q| q.five_hour.as_ref()), five_hour_error);
+            self.report.gemini_weekly =
+                WindowDiagnostic::new(val.and_then(|q| q.weekly.as_ref()), weekly_error);
             let mut summary = Entry::observed(&agy, None);
-            if g.is_some() || c.is_some() {
+            if five_hour_error.is_some() || weekly_error.is_some() {
                 if val.is_some() {
                     summary.status = Status::Stale;
                 }
@@ -378,7 +384,7 @@ fn display_deadline(d: &Dashboard) -> i64 {
         d.antigravity
             .value()
             .into_iter()
-            .flat_map(|q| [&q.gemini, &q.claude_gpt])
+            .flat_map(|q| [&q.five_hour, &q.weekly])
             .flatten()
             .map(|r| &r.window),
     ) {

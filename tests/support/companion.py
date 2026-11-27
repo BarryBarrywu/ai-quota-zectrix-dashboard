@@ -15,7 +15,7 @@ root = Path(directory)
 base = 1_800_000_000
 fixture = dict(deviceId="private-fixture-device", pageId=3)
 (root / "settings.json").write_text(json.dumps(fixture))
-snapshot = '{"quota":{"gemini":{"remaining_fraction":0.3,"reset_time":"2020-01-01T00:00:00Z"},"claude":{"remaining_fraction":0.8,"reset_time":"2020-01-01T00:00:00Z"}}}'
+snapshot = '{"quota":{"gemini-5h":{"remaining_fraction":0.3,"reset_time":"2020-01-01T00:00:00Z"},"gemini-weekly":{"remaining_fraction":0.8,"reset_time":"2020-01-01T00:00:00Z"}}}'
 (root / "status.json").write_text(snapshot)
 fake = root / "codex"
 fake.write_text("""#!/usr/bin/env python3
@@ -117,6 +117,10 @@ def report():
 
 def states(**changed):
     entries = report()
+    assert "gemini" not in entries and "claude_gpt" not in entries
+    for key in ("gemini_five_hour", "gemini_weekly"):
+        assert entries[key]["status"] == changed.get(key, changed.get("antigravity_quota", "current")), entries
+        assert entries[key]["last_success"] is not None
     for name in ("codex_quota", "antigravity_quota", "codex_radar", "antigravity_radar", "publisher"):
         assert entries[name]["status"] == changed.get(name, "current"), (name, entries)
 
@@ -164,9 +168,13 @@ finally:
 
 # Restore a valid Codex schedule through 304; the other radar now fails independently.
 c.fail, a.fail = False, True
+weekly_only = json.loads(snapshot)
+del weekly_only["quota"]["gemini-5h"]
+(root / "status.json").write_text(json.dumps(weekly_only))
 p = start(base + 4200)
 try:
-    states(antigravity_radar="stale")
+    states(antigravity_radar="stale", antigravity_quota="stale", gemini_weekly="current")
+    assert latest()["gemini_five_hour"]["reason"] == "missing_window"
 finally:
     stop(p)
 

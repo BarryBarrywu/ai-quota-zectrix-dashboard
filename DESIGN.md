@@ -52,13 +52,13 @@
 - **Optional Right Badges (`x: 142..190, y: 39..56`)**:
   - When stale: outlined `INK` badge `旧`.
   - When `remaining_percent <= 25`: bold `[!LOW]` label.
-  - Otherwise when `reset_credits > 0`: outlined 1.5px `INK` badge `CR×N`.
+  - Otherwise when `reset_credits > 0`: outlined `INK` badge `CR×N`, right-aligned at `x = 190` and always on the header row. The badge expands left to fit the full count and uses a 5×8 bitmap font for counts of six or more digits. The stale badge shifts left with it. The header tag narrows as needed and uses a condensed 6×13 label when space is tight.
 - **NERV 270° Orbital Energy Ring (black ink on white paper)**:
   - Center: `(104, 124)`, outer track radius `r = 50`, angular span `270°` (`135°` to `405°`).
   - **20 radial scale ticks** around `r + 4` to `r + 7` (major ticks every 5th step extend to `r + 11`, 2px stroke).
   - **Base track**: 1.5px `INK` arc across full `270°`.
   - **Remaining fill arc**: 11px thick `INK` arc centered at `r - 6`, sweeping `270° × (remaining_percent / 100)`.
-  - **Center Readout**: Giant bold tabular numeral (`66`, `100`, `u8g2_font_logisoso42_tn`) centered at `(104, 136)` with `%` at `(104, 152)`.
+  - **Center Readout**: Bold tabular numeral (42px Logisoso for one or two digits, 34px for `100` to clear the inner arc) centered at `(104, 136)` with `%` at `(104, 152)`.
 - **Slanted Energy Bar**: `x: 20..188, y: 190..203` (height `13px`, 10 slanted `INK` segments).
 - **Footer Readout**: `RST // <countdown>` centered at `x = 104, baseline = 220`.
 - **Unavailable State**: Keep armored frame, header tag, and empty 270° track + ticks (no filled arc, never `0%`); center reads `暂不可用` / `等待 Codex`.
@@ -92,7 +92,7 @@
 ## 4. Typography & Anti-Churn Cadence
 
 - **Bitmap Fonts (`u8g2-fonts`)**:
-  - Codex hero numeral: `u8g2_font_logisoso50_tn` / `u8g2_font_logisoso42_tn`
+  - Codex hero numeral: `u8g2_font_logisoso42_tn` / `u8g2_font_logisoso34_tn`
   - Gemini percentage numerals: `u8g2_font_logisoso26_tn` / `u8g2_font_logisoso30_tn`
   - Labels & CJK copy: `u8g2_font_wqy13_t_gb2312` & `u8g2_font_wqy14_t_gb2312`
 - **Coarse Countdown Cadence**: `>= 24h` hourly steps, `1h..24h` 15-minute steps, `15m..1h` 5-minute steps, `< 15m` 1-minute steps; confirmed reset elapsed labels step hourly once `>= 1h` old.
