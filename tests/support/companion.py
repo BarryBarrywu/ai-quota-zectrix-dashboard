@@ -15,7 +15,7 @@ root = Path(directory)
 base = 1_800_000_000
 fixture = dict(deviceId="private-fixture-device", pageId=3)
 (root / "settings.json").write_text(json.dumps(fixture))
-snapshot = '{"quota":{"gemini":{"remaining_fraction":0.3,"reset_time":"2020-01-01T00:00:00Z"},"claude":{"remaining_fraction":0.8,"reset_time":"2020-01-01T00:00:00Z"}}}'
+snapshot = '{"quota":{"gemini-5h":{"remaining_fraction":0.3,"reset_time":"2020-01-01T00:00:00Z"},"gemini-weekly":{"remaining_fraction":0.8,"reset_time":"2020-01-01T00:00:00Z"}}}'
 (root / "status.json").write_text(snapshot)
 fake = root / "codex"
 fake.write_text("""#!/usr/bin/env python3

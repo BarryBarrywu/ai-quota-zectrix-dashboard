@@ -225,7 +225,7 @@ impl Frame {
         &mut self,
         y: i32,
         name: &str,
-        reading: Option<&crate::model::GroupReading>,
+        reading: Option<&crate::model::WindowReading>,
         now: i64,
     ) -> Result<(), String> {
         self.rect(226, y, 162, 82, INK);
@@ -313,8 +313,8 @@ impl Frame {
             self.label(&BODY, "旧", 322..340, 46, Center, INK)?;
         }
         if let Some(q) = source.value() {
-            self.card(58, "GEMINI", q.gemini.as_ref(), now.timestamp())?;
-            self.card(150, "CLAUDE/GPT", q.claude_gpt.as_ref(), now.timestamp())?;
+            self.card(58, "GEMINI", q.five_hour.as_ref(), now.timestamp())?;
+            self.card(150, "GEMINI", q.weekly.as_ref(), now.timestamp())?;
         } else {
             for y in (56..234).step_by(5) {
                 for x in (226..388).step_by(5) {

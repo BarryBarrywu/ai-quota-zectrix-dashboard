@@ -33,6 +33,17 @@ fn run_stops_on_sigterm_and_exposes_independent_failures() {
         time::{Duration, Instant},
     };
     let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("antigravity-quota.json");
+    std::fs::write(&cache, r#"{"gemini":{"kind":"weekly","remaining_percent":12},"claude_gpt":{"kind":"five_hour","remaining_percent":34}}"#).unwrap();
+    let before = Command::new(BIN)
+        .arg("diagnostics")
+        .env("AI_QUOTA_DATA_DIR", dir.path())
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&before.stdout).unwrap();
+    for key in ["antigravity_quota", "gemini_five_hour", "gemini_weekly"] {
+        assert_eq!(report[key]["status"], "unavailable");
+    }
     std::fs::write(
         dir.path().join("snapshot.json"),
         include_bytes!("data/agy-statusline.json"),
@@ -64,6 +75,13 @@ fn run_stops_on_sigterm_and_exposes_independent_failures() {
     assert_eq!(report["codex_quota"]["status"], "unavailable");
     assert_eq!(report["antigravity_quota"]["status"], "current");
     assert_eq!(report["publisher"]["reason"], "not_configured");
+    let cached: serde_json::Value = serde_json::from_slice(&std::fs::read(cache).unwrap()).unwrap();
+    assert_eq!(cached["five_hour"]["remaining_percent"], 33);
+    assert_eq!(cached["weekly"]["remaining_percent"], 67);
+    for key in ["gemini", "claude_gpt"] {
+        assert!(cached.get(key).is_none());
+        assert!(report.get(key).is_none());
+    }
     unsafe {
         libc::kill(daemon.id() as i32, libc::SIGTERM);
     }
@@ -223,7 +241,7 @@ fn installation_discovers_agy_in_path_and_only_persists_an_explicit_safe_proxy()
 }
 
 #[test]
-fn restarted_daemon_preserves_the_other_groups_last_success() {
+fn restarted_daemon_preserves_the_other_windows_last_success() {
     use std::{
         fs,
         os::unix::fs::PermissionsExt,
@@ -237,7 +255,7 @@ if [ "$1" = "--version" ]; then echo 1.5.18; exit; fi
 echo '{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"buckets":[{"id":"gemini-weekly","window":"weekly","remaining_fraction":0.91}]}]}}}'
 "#).unwrap();
     fs::set_permissions(&agy, fs::Permissions::from_mode(0o700)).unwrap();
-    fs::write(root.join("antigravity-quota.json"),r#"{"gemini":{"kind":"weekly","remaining_percent":3,"resets_at":null},"claude_gpt":{"kind":"weekly","remaining_percent":72,"resets_at":null,"last_success":4567}}"#).unwrap();
+    fs::write(root.join("antigravity-quota.json"),r#"{"weekly":{"kind":"weekly","remaining_percent":3,"resets_at":null},"five_hour":{"kind":"five_hour","remaining_percent":72,"resets_at":null,"last_success":4567}}"#).unwrap();
     for _ in 0..2 {
         let mut child = Command::new(BIN)
             .args(["run", "--codex-program", "/nonexistent/codex"])
@@ -259,15 +277,37 @@ echo '{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"buckets"
             libc::kill(child.id() as i32, libc::SIGTERM);
         }
         assert!(child.wait().unwrap().success());
-        assert_eq!(report["gemini"]["status"], "current");
-        assert!(report["gemini"]["last_success"].as_i64().unwrap() > 4567);
-        assert_eq!(report["claude_gpt"]["status"], "stale");
-        assert_eq!(report["claude_gpt"]["reason"], "missing_group");
-        assert_eq!(report["claude_gpt"]["last_success"], 4567);
+        assert_eq!(report["gemini_weekly"]["status"], "current");
+        assert!(report["gemini_weekly"]["last_success"].as_i64().unwrap() > 4567);
+        assert_eq!(report["gemini_five_hour"]["status"], "stale");
+        assert_eq!(report["gemini_five_hour"]["reason"], "missing_window");
+        assert_eq!(report["gemini_five_hour"]["last_success"], 4567);
         let cached: serde_json::Value =
             serde_json::from_slice(&fs::read(root.join("antigravity-quota.json")).unwrap())
                 .unwrap();
-        assert_eq!(cached["claude_gpt"]["remaining_percent"], 72);
+        assert_eq!(cached["five_hour"]["remaining_percent"], 72);
         fs::remove_file(path).unwrap();
     }
+}
+
+#[test]
+fn cached_windows_only_restore_into_their_matching_slots() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("antigravity-quota.json"),
+        r#"{
+        "five_hour":{"kind":"weekly","remaining_percent":70,"last_success":10},
+        "weekly":{"kind":"weekly","remaining_percent":70,"last_success":10}
+    }"#,
+    )
+    .unwrap();
+    let out = Command::new(BIN)
+        .arg("diagnostics")
+        .env("AI_QUOTA_DATA_DIR", dir.path())
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["gemini_five_hour"]["status"], "unavailable");
+    assert_eq!(report["gemini_weekly"]["status"], "stale");
+    assert_eq!(report["gemini_weekly"]["last_success"], 10);
 }

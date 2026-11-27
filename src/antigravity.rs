@@ -1,4 +1,4 @@
-use crate::model::{AntigravityQuota, GroupReading, QuotaWindow, Source, WindowKind};
+use crate::model::{AntigravityQuota, QuotaWindow, Source, WindowKind, WindowReading};
 use chrono::DateTime;
 use serde_json::Value;
 use std::{fs::File, io::Read, path::Path, time::UNIX_EPOCH};
@@ -12,55 +12,45 @@ fn json(reader: impl Read) -> Option<Value> {
 }
 
 #[derive(Default)]
-struct Groups {
+struct GeminiWindows {
     windows: [Option<(f64, QuotaWindow)>; 2],
 }
-impl Groups {
+impl GeminiWindows {
     fn add(&mut self, identity: &str, window: &str, fraction: f64, resets_at: Option<i64>) {
         let identity = identity.to_ascii_lowercase();
-        let index = if identity.contains("gemini") {
-            0
-        } else if [
-            "third_party",
-            "third-party",
-            "third party",
-            "3p",
-            "claude",
-            "gpt",
-        ]
-        .iter()
-        .any(|tag| identity.contains(tag))
+        if !identity.contains("gemini")
+            || [
+                "third_party",
+                "third-party",
+                "third party",
+                "3p",
+                "claude",
+                "gpt",
+            ]
+            .iter()
+            .any(|tag| identity.contains(tag))
         {
-            1
-        } else {
             return;
-        };
+        }
         if !(0.0..=1.0).contains(&fraction) || resets_at.is_some_and(|t| t <= 0) {
             return;
         }
         let label = window.to_ascii_lowercase();
-        let kind = if label.contains("week") {
-            WindowKind::Weekly
+        let (index, kind) = if label.contains("week") {
+            (1, WindowKind::Weekly)
         } else if ["five", "5h", "5-h", "5_h", "5 h"]
             .iter()
             .any(|tag| label.contains(tag))
         {
-            WindowKind::FiveHour
+            (0, WindowKind::FiveHour)
         } else {
-            WindowKind::Unspecified
+            return;
         };
-        if let Some((best, current)) = &mut self.windows[index]
+        if let Some((best, current)) = &self.windows[index]
             && (*best < fraction
                 || (*best == fraction
                     && current.resets_at.unwrap_or(i64::MAX) <= resets_at.unwrap_or(i64::MAX)))
         {
-            if *best == fraction
-                && current.resets_at.is_none()
-                && resets_at.is_none()
-                && current.kind != kind
-            {
-                current.kind = WindowKind::Tied;
-            }
             return;
         }
         self.windows[index] = Some((
@@ -72,21 +62,15 @@ impl Groups {
             },
         ));
     }
-    fn finish(self, captured: i64) -> Option<AntigravityQuota> {
-        let [gemini, third] = self.windows.map(|w| {
-            w.map(|(_, window)| GroupReading {
+    fn finish(self, captured: i64) -> AntigravityQuota {
+        let [five_hour, weekly] = self.windows.map(|w| {
+            w.map(|(_, window)| WindowReading {
                 window,
                 stale: false,
                 last_success: Some(captured),
             })
         });
-        if gemini.is_none() && third.is_none() {
-            return None;
-        }
-        Some(AntigravityQuota {
-            gemini,
-            claude_gpt: third,
-        })
+        AntigravityQuota { five_hour, weekly }
     }
 }
 fn reset(value: &Value) -> Option<i64> {
@@ -133,7 +117,7 @@ pub fn observe_snapshot(
 }
 
 fn parse_report(doc: &Value, captured: i64) -> Option<AntigravityQuota> {
-    let mut groups = Groups::default();
+    let mut windows = GeminiWindows::default();
     let mut add_bucket = |id: &str, window: &str, bucket: &Value| {
         if bucket["disabled"] == true {
             return;
@@ -144,11 +128,11 @@ fn parse_report(doc: &Value, captured: i64) -> Option<AntigravityQuota> {
         let at = reset(&bucket["reset_time"]).filter(|t| *t > 0).or_else(|| {
             captured.checked_add(i64::try_from(bucket["reset_in_seconds"].as_u64()?).ok()?)
         });
-        groups.add(id, window, f, at);
+        windows.add(id, window, f, at);
     };
     if let Some(buckets) = doc["quota"].as_object() {
         for (id, bucket) in buckets {
-            add_bucket(id, id, bucket);
+            add_bucket(id, bucket["window"].as_str().unwrap_or(id), bucket);
         }
     } else if doc["status"] == "SUCCESS" && doc["command"]["name"] == "usage" {
         for group in doc.pointer("/command/data/groups")?.as_array()? {
@@ -161,7 +145,7 @@ fn parse_report(doc: &Value, captured: i64) -> Option<AntigravityQuota> {
     } else {
         return None;
     }
-    groups.finish(captured)
+    Some(windows.finish(captured))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -175,7 +159,7 @@ pub enum Failure {
     Timeout,
     Network,
     InvalidReport,
-    MissingGroup,
+    MissingWindow,
     UnknownExit,
     SnapshotUnavailable,
 }
@@ -190,7 +174,7 @@ impl Failure {
     }
 
     fn retryable(self) -> bool {
-        matches!(self, Self::Timeout | Self::Network | Self::MissingGroup)
+        matches!(self, Self::Timeout | Self::Network | Self::MissingWindow)
     }
 }
 
@@ -393,7 +377,7 @@ impl Observer {
         let fresh = matches!(snap, Some(Source::Current(_)));
         let snapshot = snap.as_ref().and_then(Source::value);
         let complete =
-            fresh && snapshot.is_some_and(|q| q.gemini.is_some() && q.claude_gpt.is_some());
+            fresh && snapshot.is_some_and(|q| q.five_hour.is_some() && q.weekly.is_some());
         let live = if complete {
             None
         } else {
@@ -401,12 +385,13 @@ impl Observer {
         };
         let failure = match &live {
             Some(Err(e)) => *e,
-            Some(Ok(_)) => Failure::MissingGroup,
+            Some(Ok(_)) => Failure::MissingWindow,
+            None if fresh => Failure::MissingWindow,
             _ => Failure::SnapshotUnavailable,
         };
         let result = live.and_then(Result::ok);
         let select =
-            |s: Option<&GroupReading>, l: Option<&GroupReading>, p: Option<&GroupReading>| {
+            |s: Option<&WindowReading>, l: Option<&WindowReading>, p: Option<&WindowReading>| {
                 if fresh && let Some(v) = s {
                     return (Some(v.clone()), None);
                 }
@@ -424,17 +409,19 @@ impl Observer {
                     });
                 (stale, Some(failure))
             };
-        let (gemini, g) = select(
-            snapshot.and_then(|q| q.gemini.as_ref()),
-            result.as_ref().and_then(|q| q.gemini.as_ref()),
-            previous.and_then(|q| q.gemini.as_ref()),
+        let (five_hour, sprint_error) = select(
+            snapshot.and_then(|q| q.five_hour.as_ref()),
+            result.as_ref().and_then(|q| q.five_hour.as_ref()),
+            previous.and_then(|q| q.five_hour.as_ref()),
         );
-        let (claude_gpt, c) = select(
-            snapshot.and_then(|q| q.claude_gpt.as_ref()),
-            result.as_ref().and_then(|q| q.claude_gpt.as_ref()),
-            previous.and_then(|q| q.claude_gpt.as_ref()),
+        let (weekly, weekly_error) = select(
+            snapshot.and_then(|q| q.weekly.as_ref()),
+            result.as_ref().and_then(|q| q.weekly.as_ref()),
+            previous.and_then(|q| q.weekly.as_ref()),
         );
-        let delay = if [g, c].into_iter().flatten().any(Failure::retryable) {
+        let errors = [sprint_error, weekly_error];
+        let partial = sprint_error.is_some() != weekly_error.is_some();
+        let delay = if partial || errors.into_iter().flatten().any(Failure::retryable) {
             let d = [15, 60, 300][self.retries];
             self.retries = (self.retries + 1).min(2);
             d
@@ -442,16 +429,16 @@ impl Observer {
             self.retries = 0;
             600
         };
-        let absent = gemini.is_none() && claude_gpt.is_none();
-        let quota = AntigravityQuota { gemini, claude_gpt };
+        let absent = five_hour.is_none() && weekly.is_none();
+        let quota = AntigravityQuota { five_hour, weekly };
         let source = if absent {
             Source::Unavailable
-        } else if g.is_some() && c.is_some() {
+        } else if sprint_error.is_some() && weekly_error.is_some() {
             Source::Stale(quota)
         } else {
             Source::Current(quota)
         };
-        (source, [g, c], delay)
+        (source, errors, delay)
     }
 }
 fn parse_semver(raw: &str) -> Option<(u32, u32, u32)> {
@@ -479,6 +466,7 @@ pub fn cli_quota(program: &Path) -> Option<AntigravityQuota> {
     Observer::default()
         .usage(program, chrono::Utc::now().timestamp())
         .ok()
+        .filter(|q| q.five_hour.is_some() || q.weekly.is_some())
 }
 
 pub fn cli_path() -> Option<std::path::PathBuf> {
