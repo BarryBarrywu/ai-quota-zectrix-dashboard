@@ -316,3 +316,97 @@ fn legacy_cache_hides_third_party_and_refetches_the_full_status() {
             .contains("if-none-match")
     );
 }
+
+#[test]
+fn named_scope_filters_only_exclusively_third_party_model_ids() {
+    for (scope, retained) in [
+        (
+            json!({"modelScope":"named","modelIds":["claude-sonnet-4","GPT-OSS-120B"]}),
+            false,
+        ),
+        (json!({"modelIds":["claude-opus-4"]}), false),
+        (
+            json!({"modelIds":["3p-5h", "third_party-weekly", "third-party-pool"]}),
+            false,
+        ),
+        (
+            json!({"modelIds":["anthropic/claude-opus-4", "openai/gpt-4"]}),
+            false,
+        ),
+        (json!({"modelIds":["unknown/gpt-4"]}), true),
+        (json!({"modelIds":["gpt-4","gemini-pro"]}), true),
+        (json!({"modelIds":["gpt-4","gptish"]}), true),
+        (json!({"modelScope":"named","modelIds":[]}), true),
+        (json!({"modelScope":"named"}), true),
+    ] {
+        let mut data = signals();
+        for key in ["nextScheduled", "latestGlobal", "latestBanked"] {
+            data[key]["scope"] = scope.clone();
+        }
+        let (addr, worker) = server(vec![ok(data)]);
+        let dir = tempfile::tempdir().unwrap();
+        let mut observer =
+            RadarObserver::loopback(Provider::Antigravity, dir.path().join("agy"), addr).unwrap();
+        let result = observer.poll(100000);
+        if retained {
+            assert!(
+                matches!(
+                    result,
+                    Source::Current(Radar::Scheduled {
+                        scope: Scope::Named,
+                        ..
+                    })
+                ),
+                "{scope}"
+            );
+        } else {
+            assert_eq!(result, Source::Current(Radar::NoSchedule), "{scope}");
+        }
+        worker.join().unwrap();
+    }
+}
+
+#[test]
+fn legacy_named_evidence_is_refetched_once_then_revalidated_on_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("agy");
+    let cache = json!({"provider":"Antigravity","etag":"legacy","events":{
+        "schedule":{"state":"scheduled","starts_at":100800,"ends_at":104400,"scope":"named"},
+        "confirmation":{"state":"confirmed","kind":"global","announced_at":97200,"scope":"named"}
+    }});
+    std::fs::write(&path, cache.to_string()).unwrap();
+    let mut data = signals();
+    data["nextScheduled"]["scope"] = json!({"modelIds":["gemini-pro"]});
+    let (addr, worker) = server(vec![
+        ok(data),
+        "HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n".into(),
+    ]);
+    let restart = || RadarObserver::loopback(Provider::Antigravity, path.clone(), addr).unwrap();
+    let mut observer = restart();
+    assert_eq!(observer.view(100000), Source::Unavailable);
+    assert_eq!(observer.view(104400), Source::Unavailable);
+    let refreshed = observer.poll(100000);
+    assert!(matches!(
+        refreshed,
+        Source::Current(Radar::Scheduled {
+            scope: Scope::Named,
+            ..
+        })
+    ));
+    let mut observer = restart();
+    assert!(matches!(
+        observer.view(100001),
+        Source::Stale(Radar::Scheduled {
+            scope: Scope::Named,
+            ..
+        })
+    ));
+    assert_eq!(observer.poll(100001), refreshed);
+    let requests = worker.join().unwrap();
+    assert!(!requests[0].to_lowercase().contains("if-none-match"));
+    assert!(
+        requests[1]
+            .to_lowercase()
+            .contains("if-none-match: \"123\"")
+    );
+}

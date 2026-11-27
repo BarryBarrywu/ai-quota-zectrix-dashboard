@@ -77,9 +77,40 @@ fn low_and_cached_badges_fit_alongside_full_percentages_and_reset_labels() {
         unreachable!()
     };
     q.weekly.remaining_percent = 100;
-    q.reset_credits = Some(u32::MAX);
-    let frame = render(&d).unwrap();
-    assert!(frame.visible_text.contains(&"CR×4294967295".to_owned()));
+    q.reset_credits = None;
+    let empty = pixels(&render(&d).unwrap());
+    for n in [10, 12345, 1234567, u32::MAX] {
+        let Source::Stale(q) = &mut d.codex else {
+            unreachable!()
+        };
+        q.reset_credits = Some(n);
+        let frame = render(&d).unwrap();
+        for label in ["CODEX // WK".into(), format!("CR×{n}"), "旧".into()] {
+            assert!(frame.visible_text.contains(&label), "{label}");
+        }
+        let image = pixels(&frame);
+        assert_eq!(
+            image.get_pixel(187, 39)[0],
+            0,
+            "credit badge at header right"
+        );
+        let mut gaps = 0;
+        let mut in_gap = false;
+        for x in 23..187 {
+            let paper = (39..56).all(|y| image.get_pixel(x, y)[0] == 255);
+            gaps += usize::from(paper && !in_gap);
+            in_gap = paper;
+        }
+        assert_eq!(
+            gaps, 2,
+            "title, stale badge and credit count need separate boxes"
+        );
+        for (x, y, p) in image.enumerate_pixels() {
+            if !(18..190).contains(&x) || !(39..56).contains(&y) {
+                assert_eq!(p, empty.get_pixel(x, y), "credit outside header at {x},{y}");
+            }
+        }
+    }
 }
 
 #[test]

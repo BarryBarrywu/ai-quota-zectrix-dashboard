@@ -22,6 +22,8 @@ struct Events {
 
 #[derive(Serialize, Deserialize)]
 struct Cache {
+    #[serde(default)]
+    named_scopes_filtered: bool,
     provider: Provider,
     events: Events,
     etag: Option<String>,
@@ -52,25 +54,25 @@ impl RadarObserver {
             .ok()
             .and_then(|file| serde_json::from_reader::<_, Cache>(file.take(4096)).ok())
             .filter(|cache| cache.provider == provider);
-        let (mut events, mut etag, retry_after) = cached
-            .map(|c| (c.events, c.etag, c.retry_after))
+        let (mut events, mut etag, retry_after, named_scopes_filtered) = cached
+            .map(|c| (c.events, c.etag, c.retry_after, c.named_scopes_filtered))
             .unwrap_or_default();
-        if provider == Provider::Antigravity {
+        if provider == Provider::Antigravity && !named_scopes_filtered {
             for event in [&mut events.schedule, &mut events.confirmation] {
                 if matches!(
                     event,
                     Some(
                         Radar::Scheduled {
-                            scope: Scope::ClaudeGpt,
+                            scope: Scope::ClaudeGpt | Scope::Named,
                             ..
                         } | Radar::Confirmed {
-                            scope: Scope::ClaudeGpt,
+                            scope: Scope::ClaudeGpt | Scope::Named,
                             ..
                         }
                     )
                 ) {
+                    // Old named events omitted model IDs and can mask an eligible confirmation.
                     *event = None;
-                    // The old cache may have discarded a relevant, earlier confirmation.
                     etag = None;
                 }
             }
@@ -235,6 +237,7 @@ impl RadarObserver {
         fs::create_dir_all(parent).map_err(|_| "cache write failed")?;
         let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|_| "cache write failed")?;
         let cache = Cache {
+            named_scopes_filtered: true,
             provider: self.provider,
             events: self.events.clone(),
             etag: self.etag.clone(),
@@ -252,22 +255,36 @@ fn timestamp(v: &Value) -> Option<i64> {
         .map(|t| t.timestamp())
 }
 
+fn third_party_model(id: &Value) -> bool {
+    let Some(id) = id.as_str() else { return false };
+    let id = id.trim().to_ascii_lowercase().replace('_', "-");
+    [
+        "claude",
+        "gpt",
+        "3p",
+        "third-party",
+        "anthropic/claude",
+        "openai/gpt",
+    ]
+    .iter()
+    .any(|family| {
+        id.strip_prefix(family)
+            .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('-'))
+    })
+}
+
 fn scope(record: &Value, provider: Provider) -> Scope {
     if provider == Provider::Codex {
         return Scope::Unknown;
     }
     let scope = &record["scope"];
-    match scope["modelScope"].as_str() {
-        Some("gemini") => Scope::Gemini,
-        Some("3p" | "third_party" | "third-party" | "CLAUDE/GPT") => Scope::ClaudeGpt,
-        Some("all") => Scope::All,
-        Some("named") => Scope::Named,
-        None if scope["modelIds"]
-            .as_array()
-            .is_some_and(|ids| !ids.is_empty()) =>
-        {
-            Scope::Named
-        }
+    let ids = scope["modelIds"].as_array().filter(|ids| !ids.is_empty());
+    match (scope["modelScope"].as_str(), ids) {
+        (Some("gemini"), _) => Scope::Gemini,
+        (Some("3p" | "third_party" | "third-party" | "CLAUDE/GPT"), _) => Scope::ClaudeGpt,
+        (Some("all"), _) => Scope::All,
+        (Some("named") | None, Some(ids)) if ids.iter().all(third_party_model) => Scope::ClaudeGpt,
+        (Some("named"), _) | (None, Some(_)) => Scope::Named,
         _ => Scope::Unknown,
     }
 }

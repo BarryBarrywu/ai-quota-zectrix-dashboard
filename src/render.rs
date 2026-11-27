@@ -28,6 +28,7 @@ impl Frame {
 }
 
 use crate::model::{CodexQuota, Radar, ResetKind, Scope, Source, WindowKind};
+use crate::radar::Provider;
 use chrono::{Datelike, TimeZone};
 use embedded_graphics::{
     draw_target::DrawTargetExt,
@@ -185,16 +186,69 @@ impl Frame {
         }
     }
 
-    fn badge(&mut self, x: Range<i32>, y: i32, label: &str) -> Result<(), String> {
+    fn badge(
+        &mut self,
+        font: &FontRenderer,
+        x: Range<i32>,
+        y: i32,
+        label: &str,
+    ) -> Result<(), String> {
         self.chamfer(x.clone(), y..y + 17, 2, INK);
         self.chamfer(x.start + 1..x.end - 1, y + 1..y + 16, 2, PAPER);
-        self.label(&BODY, label, x.start + 2..x.end - 2, y + 13, Center, INK)
+        self.label(font, label, x.start + 2..x.end - 2, y + 13, Center, INK)
+    }
+
+    fn dial_header(&mut self, source: &Source<CodexQuota>) -> Result<(), String> {
+        let mut badge_left = 145;
+        if let Some(quota) = source.value() {
+            if quota.weekly.remaining_percent <= 25 {
+                self.chamfer(145..190, 39..56, 3, INK);
+                self.label(
+                    &FontRenderer::new::<u8g2_font_6x13B_tf>(),
+                    "[!LOW]",
+                    147..188,
+                    52,
+                    Center,
+                    PAPER,
+                )?;
+            } else if let Some(n) = quota.reset_credits.filter(|n| *n > 0) {
+                let label = format!("CR×{n}");
+                let font = if n >= 100_000 {
+                    &FontRenderer::new::<u8g2_font_5x8_tf>()
+                } else {
+                    &BODY
+                };
+                let width = font
+                    .get_rendered_dimensions(
+                        label.as_str(),
+                        Point::zero(),
+                        VerticalPosition::Baseline,
+                    )
+                    .map_err(|e| format!("credit measurement: {e:?}"))?
+                    .advance
+                    .x;
+                badge_left = 190 - (width + 4).max(45);
+                self.badge(font, badge_left..190, 39, &label)?;
+            }
+        }
+        if source.is_stale() {
+            let right = badge_left - 1;
+            badge_left = right - 19;
+            self.badge(&BODY, badge_left..right, 39, "旧")?;
+        }
+        let tag_end = 122.min(badge_left - 3);
+        self.chamfer(18..tag_end, 39..56, 5, INK);
+        let font = if tag_end < 110 {
+            &FontRenderer::new::<u8g2_font_6x13B_tf>()
+        } else {
+            &LABEL
+        };
+        self.label(font, "CODEX // WK", 22..tag_end - 4, 52, Center, PAPER)
     }
 
     fn dial(&mut self, source: &Source<CodexQuota>, now: i64) -> Result<(), String> {
         self.armor(10..198, 32..230, 14, 3);
-        self.chamfer(18..122, 39..56, 5, INK);
-        self.label(&LABEL, "CODEX // WK", 22..118, 52, Center, PAPER)?;
+        self.dial_header(source)?;
         let center = Point::new(104, 124);
         Arc::with_center(center, 101, 135.0.deg(), 270.0.deg())
             .into_styled(PrimitiveStyle::with_stroke(INK, 2))
@@ -219,27 +273,6 @@ impl Frame {
             let w = &quota.weekly;
             if w.kind != WindowKind::Weekly || w.remaining_percent > 100 {
                 return Err("invalid Codex weekly window".into());
-            }
-            if source.is_stale() {
-                self.badge(125..144, 39, "旧")?;
-            }
-            if w.remaining_percent <= 25 {
-                self.chamfer(145..190, 39..56, 3, INK);
-                self.label(
-                    &FontRenderer::new::<u8g2_font_6x13B_tf>(),
-                    "[!LOW]",
-                    147..188,
-                    52,
-                    Center,
-                    PAPER,
-                )?;
-            } else if let Some(n) = quota.reset_credits.filter(|n| *n > 0) {
-                let (region, y) = if n > 9 {
-                    (48..160, 171)
-                } else {
-                    (145..190, 39)
-                };
-                self.badge(region, y, &format!("CR×{n}"))?;
             }
             if w.remaining_percent > 0 {
                 Arc::with_center(
@@ -297,7 +330,7 @@ impl Frame {
             return self.label(&LABEL, "暂不可用", 218..376, y + 57, Center, INK);
         };
         if reading.stale {
-            self.badge(344..376, y + 6, "旧")?;
+            self.badge(&BODY, 344..376, y + 6, "旧")?;
         }
         let w = &reading.window;
         if w.remaining_percent > 100 {
@@ -367,10 +400,14 @@ impl Frame {
     fn radar(
         &mut self,
         x: i32,
-        provider: &str,
+        provider: Provider,
         source: &Source<Radar>,
         d: &Dashboard,
     ) -> Result<(), String> {
+        let name = match provider {
+            Provider::Codex => "CODEX",
+            Provider::Antigravity => "GEMINI",
+        };
         let state = source.value();
         let active = matches!(
             state,
@@ -395,10 +432,10 @@ impl Frame {
                     time.format("%m/%d ").to_string()
                 };
                 (
-                    format!("{provider} // 重置排期"),
+                    format!("{name} // 重置排期"),
                     format!(
                         "{}{date}{}{}",
-                        if provider == "GEMINI" {
+                        if provider == Provider::Antigravity {
                             format!("{} ", scope.label())
                         } else {
                             String::new()
@@ -418,10 +455,10 @@ impl Frame {
                     ResetKind::Banked => "重置额度已发",
                 };
                 (
-                    format!("{provider} // {status}"),
+                    format!("{name} // {status}"),
                     format!(
                         "{} · {}",
-                        if provider == "GEMINI" {
+                        if provider == Provider::Antigravity {
                             scope.label()
                         } else {
                             match kind {
@@ -433,8 +470,8 @@ impl Frame {
                     ),
                 )
             }
-            Some(Radar::NoSchedule) => (format!("{provider} RADAR"), "暂无排期".into()),
-            None => (format!("{provider} RADAR"), "信号丢失".into()),
+            Some(Radar::NoSchedule) => (format!("{name} RADAR"), "暂无排期".into()),
+            None => (format!("{name} RADAR"), "信号丢失".into()),
         };
         let title = if source.is_stale() {
             format!("{title}(旧)")
@@ -516,7 +553,12 @@ pub fn render(dashboard: &Dashboard) -> Result<Frame, String> {
     };
     frame.dial(&dashboard.codex, dashboard.now.timestamp())?;
     frame.telemetry(dashboard)?;
-    frame.radar(10, "CODEX", &dashboard.codex_radar, dashboard)?;
-    frame.radar(204, "GEMINI", &dashboard.antigravity_radar, dashboard)?;
+    frame.radar(10, Provider::Codex, &dashboard.codex_radar, dashboard)?;
+    frame.radar(
+        204,
+        Provider::Antigravity,
+        &dashboard.antigravity_radar,
+        dashboard,
+    )?;
     Ok(frame)
 }
