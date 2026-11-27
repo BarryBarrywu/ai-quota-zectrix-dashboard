@@ -52,9 +52,29 @@ impl RadarObserver {
             .ok()
             .and_then(|file| serde_json::from_reader::<_, Cache>(file.take(4096)).ok())
             .filter(|cache| cache.provider == provider);
-        let (events, etag, retry_after) = cached
+        let (mut events, mut etag, retry_after) = cached
             .map(|c| (c.events, c.etag, c.retry_after))
             .unwrap_or_default();
+        if provider == Provider::Antigravity {
+            for event in [&mut events.schedule, &mut events.confirmation] {
+                if matches!(
+                    event,
+                    Some(
+                        Radar::Scheduled {
+                            scope: Scope::ClaudeGpt,
+                            ..
+                        } | Radar::Confirmed {
+                            scope: Scope::ClaudeGpt,
+                            ..
+                        }
+                    )
+                ) {
+                    *event = None;
+                    // The old cache may have discarded a relevant, earlier confirmation.
+                    etag = None;
+                }
+            }
+        }
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(3))
             .redirect(reqwest::redirect::Policy::none())
@@ -239,7 +259,7 @@ fn scope(record: &Value, provider: Provider) -> Scope {
     let scope = &record["scope"];
     match scope["modelScope"].as_str() {
         Some("gemini") => Scope::Gemini,
-        Some("3p" | "third_party" | "third-party") => Scope::ClaudeGpt,
+        Some("3p" | "third_party" | "third-party" | "CLAUDE/GPT") => Scope::ClaudeGpt,
         Some("all") => Scope::All,
         Some("named") => Scope::Named,
         None if scope["modelIds"]
@@ -259,10 +279,11 @@ fn parse(body: &[u8], provider: Provider, now: i64) -> Option<Events> {
     }
     let data = value["data"].as_object()?;
     let scheduled = data.get("nextScheduled")?;
-    if !scheduled.is_null() {
-        scheduled["scheduleState"].as_str()?;
-    }
-    let schedule = if scheduled["scheduleState"] == "pending" {
+    let schedule_scope = scope(scheduled, provider);
+    let schedule = if !scheduled.is_null()
+        && schedule_scope != Scope::ClaudeGpt
+        && scheduled["scheduleState"].as_str()? == "pending"
+    {
         let window = &scheduled["scheduleWindow"];
         let starts_at = timestamp(&window["startAt"])?;
         let ends_at = timestamp(&window["endAt"])?;
@@ -272,7 +293,7 @@ fn parse(body: &[u8], provider: Provider, now: i64) -> Option<Events> {
         Some(Radar::Scheduled {
             starts_at,
             ends_at,
-            scope: scope(scheduled, provider),
+            scope: schedule_scope,
         })
     } else {
         None
@@ -283,7 +304,8 @@ fn parse(body: &[u8], provider: Provider, now: i64) -> Option<Events> {
         ("latestBanked", ResetKind::Banked),
     ] {
         let record = data.get(key)?;
-        if record.is_null() {
+        let record_scope = scope(record, provider);
+        if record.is_null() || record_scope == Scope::ClaudeGpt {
             continue;
         }
         if record["kind"].as_str()? != "reset_completed" {
@@ -298,7 +320,7 @@ fn parse(body: &[u8], provider: Provider, now: i64) -> Option<Events> {
                 Radar::Confirmed {
                     kind,
                     announced_at: time,
-                    scope: scope(record, provider),
+                    scope: record_scope,
                 },
             ));
         }
