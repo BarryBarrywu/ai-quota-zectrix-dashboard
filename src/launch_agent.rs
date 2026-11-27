@@ -110,10 +110,16 @@ pub fn manage(action: AgentAction) -> Result<()> {
     let domain = format!("gui/{}", unsafe { libc::getuid() });
     let service = format!("{domain}/{LABEL}");
     let stop = || -> Result<()> {
-        if launchctl(&["print".as_ref(), service.as_ref()])?
-            && !launchctl(&["bootout".as_ref(), service.as_ref()])?
-        {
-            return Err("launchctl bootout 失败".into());
+        if launchctl(&["print".as_ref(), service.as_ref()])? {
+            if !launchctl(&["bootout".as_ref(), service.as_ref()])? {
+                return Err("launchctl bootout 失败".into());
+            }
+            for _ in 0..30 {
+                if !launchctl(&["print".as_ref(), service.as_ref()])? {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
         }
         Ok(())
     };
@@ -133,7 +139,15 @@ pub fn manage(action: AgentAction) -> Result<()> {
             stop()?;
             tmp.persist(binary)?;
             save(&plist, &content)?;
-            if !launchctl(&["bootstrap".as_ref(), domain.as_ref(), plist.as_os_str()])? {
+            let mut bootstrapped = false;
+            for _ in 0..5 {
+                if launchctl(&["bootstrap".as_ref(), domain.as_ref(), plist.as_os_str()])? {
+                    bootstrapped = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            if !bootstrapped {
                 return Err("launchctl bootstrap 失败".into());
             }
         }
