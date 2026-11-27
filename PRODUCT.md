@@ -33,7 +33,7 @@ A dedicated dual-AI quota and reset-signal desk instrument with zero task-title 
 
 - Four independent sources: Codex quota (`codex app-server --stdio`, displaying the **Weekly** quota window only—no 5-hour window), Codex reset signal (`didcodexreset.com/openapi/v1/status`), Antigravity quota (official CLI `/usage` report or a configured `statusLine` JSON capture), and Antigravity reset signal (`agyreset.com/openapi/v1/status`).
 - Any single source may be stale or unavailable independently; missing data is never replaced with `0%`.
-- Antigravity displays two canonical model groups (`GEMINI` and `CLAUDE/GPT`, mapped from upstream `gemini` and `third_party`/`3p` scopes), each showing its most constrained window (lowest remaining %, tie-breaking by sooner reset time).
+- Antigravity displays Gemini's two native quota windows (`GEMINI · 5H` on top and `GEMINI · WK` on bottom), each observed, cached, and degraded independently; third-party (`CLAUDE/GPT`) quotas are omitted and third-party-only `agyreset.com` events are ignored.
 - Reset signals follow one unified 3-tier priority: pending schedule > 24h confirmed reset (with affected scope) > fresh no-schedule > signal unavailable.
 - No grayscale, no animation, no interactive controls on the e-paper surface; all text must fit within 400×300 using embedded bitmap CJK and numeric fonts without truncation of critical percentages or status labels.
 
