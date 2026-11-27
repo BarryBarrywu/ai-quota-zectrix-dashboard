@@ -47,15 +47,21 @@
 
 ### B. Left Primary Armored Panel: Codex Weekly (`x: 10..198, y: 32..230`)
 - **Shadow**: 1-bit halftone (`step = 3`) at `x: 16..204, y: 38..236`.
-- **Frame**: `PAPER` fill + 2.5–3px `INK` stroke, `cut = 14px` (top-left & bottom-right).
-- **Header Tag (`x: 18..132, y: 40..58`)**: Chamfered `INK` pill (`cut = 6px`) with `PAPER` text `CODEX // WK`.
-- **Optional Right Badges (`x: 140..190, y: 40..58`)**:
+- **Frame**: `PAPER` fill (white ground, anti-ghosting) + 2.5–3px `INK` stroke, `cut = 14px` (top-left & bottom-right).
+- **Header Tag (`x: 18..122, y: 39..56`)**: Chamfered `INK` pill (`cut = 5px`) with `PAPER` text `CODEX // WK`.
+- **Optional Right Badges (`x: 142..190, y: 39..56`)**:
   - When stale: outlined `INK` badge `旧`.
-  - When `reset_credits > 0`: outlined `INK` badge `CR×N`.
-- **Hero Numeral**: Large bold tabular numeral (`66`, `100`) centered at `x = 98, baseline = 146` with `%` at `x = 164` (`u8g2_font_logisoso42_tn` or `logisoso50_tn`/`logisoso58_tn`).
-- **Slanted Energy Bar**: `x: 20..188, y: 164..184` (height `20px`, 10 slanted segments).
-- **Footer Readout**: 2px `INK` rule at `y = 194`, followed by `重置倒计时  <countdown>` at `x = 20, baseline = 214`.
-- **Unavailable State**: Keep armored frame + header tag; center reads `暂不可用` / `等待 Codex` (never `0%`).
+  - When `remaining_percent <= 25`: bold `[!LOW]` label.
+  - Otherwise when `reset_credits > 0`: outlined 1.5px `INK` badge `CR×N`.
+- **NERV 270° Orbital Energy Ring (black ink on white paper)**:
+  - Center: `(104, 124)`, outer track radius `r = 50`, angular span `270°` (`135°` to `405°`).
+  - **20 radial scale ticks** around `r + 4` to `r + 7` (major ticks every 5th step extend to `r + 11`, 2px stroke).
+  - **Base track**: 1.5px `INK` arc across full `270°`.
+  - **Remaining fill arc**: 11px thick `INK` arc centered at `r - 6`, sweeping `270° × (remaining_percent / 100)`.
+  - **Center Readout**: Giant bold tabular numeral (`66`, `100`, `u8g2_font_logisoso42_tn`) centered at `(104, 136)` with `%` at `(104, 152)`.
+- **Slanted Energy Bar**: `x: 20..188, y: 190..203` (height `13px`, 10 slanted `INK` segments).
+- **Footer Readout**: `RST // <countdown>` centered at `x = 104, baseline = 220`.
+- **Unavailable State**: Keep armored frame, header tag, and empty 270° track + ticks (no filled arc, never `0%`); center reads `暂不可用` / `等待 Codex`.
 
 ### C. Right Twin Armored Panels: Gemini 5h & Weekly (`x: 210..384`)
 - **Upper Panel (`y: 32..126`, height `94px`)**: `GEMINI · 5H` (Gemini 5-hour window).
