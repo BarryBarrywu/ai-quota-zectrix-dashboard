@@ -15,15 +15,17 @@
   "antigravity": {
     "status": "stale",
     "value": {
-      "gemini": {
+      "weekly": {
         "kind": "weekly",
-        "remaining_percent": 88,
-        "resets_at": 1796064300
+        "remaining_percent": 91,
+        "resets_at": 1796064300,
+        "stale": true
       },
-      "claude_gpt": {
+      "five_hour": {
         "kind": "five_hour",
-        "remaining_percent": 42,
-        "resets_at": 1795706700
+        "remaining_percent": 97,
+        "resets_at": 1795706700,
+        "stale": true
       }
     }
   },

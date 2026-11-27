@@ -23,6 +23,10 @@ fn preview_writes_a_deterministic_one_bit_frame_and_reports_its_pixel_hash() {
     let (png, hash) = preview();
     assert_eq!(&png[16..26], &[0, 0, 1, 144, 0, 0, 1, 44, 1, 0]); // PNG IHDR
     let pixels = image::load_from_memory(&png).unwrap().to_luma8();
+    let golden = image::load_from_memory(include_bytes!("../fixtures/normal.png"))
+        .unwrap()
+        .to_luma8();
+    assert_eq!(pixels, golden);
     use sha2::{Digest, Sha256};
     assert_eq!(
         hash.trim(),
